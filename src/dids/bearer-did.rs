@@ -3,36 +3,7 @@ use crate::crypto::jwk::JWK;
 use super::did_core::DidDocument;
 use super::portable_did::{DidMetadata, PortableDid};
 
-
-//  import type {
-//    Jwk,
-//    Signer,
-//    CryptoApi,
-//    KeyIdentifier,
-//    EnclosedSignParams,
-//    KmsExportKeyParams,
-//    KmsImportKeyParams,
-//    KeyImporterExporter,
-//    EnclosedVerifyParams,
-//  } from '@web5/crypto';
-
-//  import { LocalKeyManager, utils as cryptoUtils } from '@web5/crypto';
-
-import type { DidDocument } from './types/did-core.js';
-import type { DidMetadata, PortableDid } from './types/portable-did.js';
-
-import { DidError, DidErrorCode } from './did-error.js';
-import { extractDidFragment, getVerificationMethods } from './utils.js';
-
-/**
- * A `BearerDidSigner` extends the {@link Signer} interface to include specific properties for
- * signing with a Decentralized Identifier (DID). It encapsulates the algorithm and key identifier,
- * which are often needed when signing JWTs, JWSs, JWEs, and other data structures.
- *
- * Typically, the algorithm and key identifier are used to populate the `alg` and `kid` fields of a
- * JWT or JWS header.
- */
-export interface BearerDidSigner extends Signer {
+//pub trait BearerDidSigner extends Signer {
   /**
    * The cryptographic algorithm identifier used for signing operations.
    *
@@ -58,14 +29,8 @@ export interface BearerDidSigner extends Signer {
    */
   keyId: string;
 }
-
-/**
- * Represents a Decentralized Identifier (DID) along with its DID document, key manager, metadata,
- * and convenience functions.
- */
-export class BearerDid {
-  /** {@inheritDoc Did#uri} */
-  uri: string;
+pub struct BearerDid {
+  did_uri: string;
 
   /**
    * The DID document associated with this DID.

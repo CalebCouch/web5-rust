@@ -1,4 +1,4 @@
-use crate::crypto::jwk::JWK;
+use crate::crypto::jwk::Jwk;
 
 use super::did_core::{DidDocument, DidDocumentMetadata};
 
@@ -11,7 +11,7 @@ pub struct PortableDid {
   uri: String,
   document: DidDocument,
   metadata: DidMetadata,
-  private_keys: Option<Vec<JWK>>
+  private_keys: Option<Vec<Jwk>>
 }
 
 

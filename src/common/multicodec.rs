@@ -5,7 +5,7 @@ use super::error::Error;
 use std::collections::HashMap;
 use std::io::{Cursor, Write};
 
-type MulticodecCode = i32;
+pub type MulticodecCode = i32;
 
 pub struct MulticodecDefinition  {
   code: MulticodecCode,
@@ -30,7 +30,7 @@ impl Multicodec {
         multi
     }
 
-    pub fn add_prefix(&self, code: Option<MulticodecCode>, name: Option<String>, data: Vec<u8>) -> Result<Vec<u8>, Error> {
+    pub fn add_prefix(&self, data: Vec<u8>, code: Option<MulticodecCode>, name: Option<String>) -> Result<Vec<u8>, Error> {
         if name.is_some() && code.is_some() { return Err(Error::NameOrCode()); }
         let code = if let Some(code) = code {
             if self.code_to_name.contains_key(&code) {
@@ -72,11 +72,11 @@ impl Multicodec {
         self.name_to_code.insert(codec.name, codec.code);
     }
 
-    pub fn remove_prefix(&self, data: Vec<u8>) -> Result<(MulticodecCode, Vec<u8>, String), Error> {
+    pub fn remove_prefix(&self, data: Vec<u8>) -> Result<(Vec<u8>, MulticodecCode, String), Error> {
         let mut data_with_prefix = Cursor::new(data);
         let code = data_with_prefix.read_i32_varint()?;
         if let Some(name) = self.code_to_name.get(&code) {
-            Ok((code, data_with_prefix.into_inner(), name.to_string()))
+            Ok((data_with_prefix.into_inner(), code, name.to_string()))
         } else {
             Err(Error::UnsupportedMulticodec(code.to_string()))
         }
