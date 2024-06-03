@@ -1,10 +1,10 @@
-#![allow(dead_code)]
-pub mod error;
+use super::error::Error;
+pub mod traits;
+pub mod structs;
+pub mod signing;
 
-pub mod did;
+pub mod dht_document;
+pub use dht_document::{DhtDocument};
 
-//Types
-pub mod did_core;
-pub mod did_resolution;
-pub mod portable_did;
-pub mod multibase;
+  pub mod pkarr;
+  pub mod dns_packet;

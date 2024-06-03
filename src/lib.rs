@@ -1,5 +1,13 @@
 pub mod common;
-pub mod dids;
 pub mod crypto;
+pub mod dids;
+pub mod dwn;
+pub mod server;
+pub use server::Server;
 
-//extern crate leveldb;
+pub mod error;
+pub use error::Error;
+
+#[cfg(test)]
+mod tests;
+
