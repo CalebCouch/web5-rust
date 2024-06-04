@@ -1,13 +1,11 @@
 use super::error::Error;
 
-use crate::common::{Convert};
 use crate::crypto::ed25519;
 use crate::crypto::ed25519::Ed25519;
 use crate::crypto::traits::CryptoAlgorithm;
 
 
 use url::Url;
-use http::request::Request;
 use serde::{Deserialize, Serialize};
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,7 +29,7 @@ impl PkarrRelay {
         map.insert(b"v".to_vec(), Value::Bytes(dns_packet.clone()));
 
         let v = serde_bencode::to_bytes(&Value::Dict(map))?;
-        let v = v[1..v.len()-1].to_vec();//TODO: WHAT is this?
+        let v = v[1..v.len()-1].to_vec();
         if v.len() > 1000 { return Err(Error::InvalidDidDocumentLength(v.len().to_string())); }
 
         let sig = Ed25519::sign(&secret_key, &v).to_vec();
@@ -50,7 +48,7 @@ impl PkarrRelay {
         }
     }
 
-    pub async fn get(url: Url, public_key: ed25519::PublicKey) -> Result<Vec<u8>, Error> {
+    pub async fn get(url: Url) -> Result<Vec<u8>, Error> {
         let res = reqwest::Client::new().get(url).send().await?;
         if !res.status().is_success() {
             Err(Error::PkarrResponse(res.text().await?))

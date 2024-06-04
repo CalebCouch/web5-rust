@@ -1,8 +1,13 @@
+use super::error::Error;
 use super::{ed25519, secp256k1, secp256r1};
 use super::traits::{ToPublicKey};
 use crate::common::traits::{FromStorageBytes, AsStorageBytes};
 use crate::common::Error as CommonError;
 use serde::{Deserialize, Serialize};
+
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub enum Curve { Ed, K1, R1 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub enum PublicKey {
@@ -12,6 +17,14 @@ pub enum PublicKey {
 }
 
 impl PublicKey {
+    pub fn from_bytes(curve: Curve, bytes: &[u8]) -> Result<PublicKey, Error> {
+        Ok(match curve {
+            Curve::Ed => PublicKey::Ed(ed25519::PublicKey::from_bytes(bytes.try_into().or(Err(Error::Parse("Ed(PublicKey)".to_string(), hex::encode(bytes))))?)?),
+            Curve::K1 => todo!(),
+            Curve::R1 => todo!(),
+        })
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         match self {
             PublicKey::Ed(key) => key.as_bytes(),

@@ -8,7 +8,7 @@ use super::error::Error;
 
 //use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-//use regex::Regex;
+use regex::Regex;
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub enum DidMethod {
@@ -20,6 +20,15 @@ impl std::fmt::Display for DidMethod {
         match self {
             Self::DHT => write!(f, "dht")
         }
+    }
+}
+
+impl DidMethod {
+    pub fn parse(did_method: &str) -> Result<DidMethod, Error> {
+        Ok(match did_method {
+            "dht" => DidMethod::DHT,
+            _ => return Err(Error::Parse("did method".to_string(), did_method.to_string()))
+        })
     }
 }
 
@@ -35,6 +44,21 @@ impl std::fmt::Display for Did {
     }
 }
 
+impl Did {
+    fn method_pattern() -> String {"([a-z0-9]+)".to_string()}
+    fn pct_encoded_pattern() -> String {"(?:%[0-9a-fA-F]{2})".to_string()}
+    fn id_char_pattern() -> String {format!("(?:[a-zA-Z0-9._-]|{})", Self::pct_encoded_pattern())}
+    fn method_id_pattern() -> String {format!("((?:{}*:)*({}+))", Self::id_char_pattern(), Self::id_char_pattern())}
+    fn did_pattern() -> String { format!("did:(?<method>{}):(?<id>{})", Self::method_pattern(), Self::method_id_pattern()) }
+
+    pub fn parse(did: &str) -> Result<Did, Error> {
+        let error = || Error::Parse("did".to_string(), did.to_string());
+        let captures = Regex::new(&Self::did_pattern())?.captures(did).ok_or(error())?;
+        let method = DidMethod::parse(captures.name("method").ok_or(error())?.as_str())?;
+        let id = captures.name("id").ok_or(error())?.as_str().to_owned();
+        Ok(Did{id, method})
+    }
+}
 
 
 
@@ -51,11 +75,11 @@ impl std::fmt::Display for Did {
 //  fn method_pattern() -> String {"([a-z0-9]+)".to_string()}
 //  fn pct_encoded_pattern() -> String {"(?:%[0-9a-fA-F]{2})".to_string()}
 //  fn id_char_pattern() -> String {format!("(?:[a-zA-Z0-9._-]|{})", pct_encoded_pattern())}
+//  fn did_pattern() -> String { format!("did:(?<method>{}):(?<id>{})", method_pattern(), method_id_pattern()) }
 //  fn method_id_pattern() -> String {format!("((?:{}*:)*({}+))", id_char_pattern(), id_char_pattern())}
 //  fn path_pattern() -> String {"(/[^#?]*)?".to_string()}
 //  fn query_pattern() -> String {"([?][^#]*)?".to_string()}
 //  fn fragment_pattern() -> String {"(#.*)?".to_string()}
-//  fn did_pattern() -> String { format!("did:(?<method>{}):(?<id>{})", method_pattern(), method_id_pattern()) }
 //  fn path_query_frag() -> String { format!("(?<path>{})(?<query>{})(?<fragment>{})", path_pattern(), query_pattern(), fragment_pattern()) }
 //  fn did_uri_pattern() -> String { format!("^{}{}$", did_pattern(), path_query_frag()) }
 
@@ -65,19 +89,7 @@ impl std::fmt::Display for Did {
 //      pub method: String
 //  }
 
-//  impl Did {
-//      pub fn new(method: String, id: String) -> Did {
-//          Did{method, id}
-//      }
 
-//      pub fn parse(did: String) -> Result<Did, Error> {
-//          let error = || Error::Parse("did".to_string(), did.clone());
-//          let captures = Regex::new(&did_pattern())?.captures(&did).ok_or(error())?;
-//          let method: String = captures.name("method").ok_or(error())?.as_str().to_owned();
-//          let id: String = captures.name("id").ok_or(error())?.as_str().to_owned();
-//          Ok(Did::new(id, method))
-//      }
-//  }
 
 
 //  #[derive(Clone, Deserialize, Serialize)]

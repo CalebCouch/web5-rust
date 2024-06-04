@@ -22,14 +22,14 @@ impl Convert {
         })
     }
 
-    pub fn decode(&self, input: String) -> Result<Vec<u8>, Error> {
+    pub fn decode(&self, input: &str) -> Result<Vec<u8>, Error> {
         Ok(match &self {
-            Convert::ZBase32 => zbase32::decode(&input)?,
+            Convert::ZBase32 => zbase32::decode(input)?,
             Convert::Base64Url => {
-                Base64Url::decode(input.clone(), &mut vec![0u8; input.len()*2])?.to_vec()
+                Base64Url::decode(input, &mut vec![0u8; input.len()*2])?.to_vec()
             }
             Convert::Base64UrlUnpadded => {
-                Base64UrlUnpadded::decode(input.clone(), &mut vec![0u8; input.len()*2])?.to_vec()
+                Base64UrlUnpadded::decode(input, &mut vec![0u8; input.len()*2])?.to_vec()
             }
         })
     }

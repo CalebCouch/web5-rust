@@ -21,7 +21,7 @@ const DEFAULT_GATEWAY_URI: &str = "https://diddht.tbddev.org";
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Service {
     pub id: Url,
-    pub r#type: Vec<String>,
+    pub types: Vec<String>,
     pub service_endpoints: Vec<Url>,
     pub enc: Vec<String>,
     pub sig: Vec<String>
@@ -43,6 +43,16 @@ pub struct IdentityKey {
     pub public_key: ed25519::PublicKey,
     pub purposes: Vec<Purpose>,
     pub controller: Option<Did>
+}
+
+impl IdentityKey {
+    pub fn from_key(key: Key) -> Result<Self, Error> {
+        let error = || Error::Parse("IdentityKey".to_string(), format!("{:?}", key));
+        if key.id != Some("0".to_string()) { return Err(error()); }
+        if let PublicKey::Ed(public_key) = key.public_key {
+            Ok(IdentityKey{public_key, purposes: key.purposes, controller: key.controller})
+        } else { Err(error()) }
+    }
 }
 
 impl IdentityKey {
@@ -101,7 +111,7 @@ impl DidDht {
         key_store.store_key(&SecretKey::Ed(secret_key))?;
         let identity_key = IdentityKey{
             public_key,
-            purposes: vec![Purpose::Auth, Purpose::Asm, Purpose::Del, Purpose::Inv],
+            purposes: vec![Purpose::Auth, Purpose::Asm, Purpose::Inv, Purpose::Del],
             controller: None
         };
         Ok(DidDht{identity_key, also_known_as, controllers, services, keys, types})
@@ -125,13 +135,12 @@ impl DidDht {
         } else { Err(Error::KeyNotFound()) }
     }
 
-    pub async fn resolve(gateway: Option<Url>, public_key: ed25519::PublicKey) -> Result<(), Error> {
+    pub async fn resolve(gateway: Option<Url>, public_key: ed25519::PublicKey) -> Result<Self, Error> {
         let gateway = gateway.unwrap_or(Url::parse(DEFAULT_GATEWAY_URI)?);
         let id = Convert::ZBase32.encode(public_key.as_bytes())?;
 
-        let packet = PkarrRelay::get(gateway.join(&id)?, public_key).await?;
-        DhtDns::from_bytes(&packet[64+8..], id)?;
-        Ok(())
+        let packet = PkarrRelay::get(gateway.join(&id)?).await?;
+        DhtDns::from_bytes(&packet[64+8..], id)
     }
 }
 

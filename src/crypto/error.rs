@@ -1,5 +1,8 @@
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("Could not parse type ({0}) from: {1}")]
+    Parse(String, String),
+
     #[error(transparent)]
     TryFromSlice(#[from] std::array::TryFromSliceError),
     #[error(transparent)]
@@ -12,8 +15,6 @@ pub enum Error {
     Ed25519(#[from] ed25519_dalek::ed25519::Error),
     #[error("{0}")]
     JoseB64(String),
-    #[error("Could not convert from storage bytes to type")]
-    FromStorageBytes(),
     #[error("No thumbprint was found for JWK under s256")]
     NoThumbprint(),
     #[error("Invalid key provided. Must be an elliptic curve (EC) private key")]
