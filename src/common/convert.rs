@@ -1,36 +1,24 @@
 use super::error::Error;
-use base64ct::{Base64UrlUnpadded, Base64Url, Encoding};
+use base64::prelude::{Engine as _, BASE64_URL_SAFE_NO_PAD};
 use zbase32;
 
 pub enum Convert {
     ZBase32,
-    Base64Url,
     Base64UrlUnpadded
 }
 
-//TODO: A better way to size buffer than input.len()*2
 impl Convert {
-    pub fn encode(&self, data: &[u8]) -> Result<String, Error> {
-        Ok(match &self {
+    pub fn encode(&self, data: &[u8]) -> String {
+        match &self {
             Convert::ZBase32 => zbase32::encode(data),
-            Convert::Base64Url => {
-                Base64Url::encode(data, &mut vec![0u8; data.len()*2])?.to_string()
-            },
-            Convert::Base64UrlUnpadded => {
-                Base64UrlUnpadded::encode(data, &mut vec![0u8; data.len()*2])?.to_string()
-            }
-        })
+            Convert::Base64UrlUnpadded => BASE64_URL_SAFE_NO_PAD.encode(data)
+        }
     }
 
     pub fn decode(&self, input: &str) -> Result<Vec<u8>, Error> {
         Ok(match &self {
             Convert::ZBase32 => zbase32::decode(input)?,
-            Convert::Base64Url => {
-                Base64Url::decode(input, &mut vec![0u8; input.len()*2])?.to_vec()
-            }
-            Convert::Base64UrlUnpadded => {
-                Base64UrlUnpadded::decode(input, &mut vec![0u8; input.len()*2])?.to_vec()
-            }
+            Convert::Base64UrlUnpadded => BASE64_URL_SAFE_NO_PAD.decode(input)?
         })
     }
 }

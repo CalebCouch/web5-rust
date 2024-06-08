@@ -1,21 +1,31 @@
 use super::error::Error;
-//use crate::crypto::PublicKey;
 
-//use http::uri::Uri as HttpUri;
-//use crate::crypto::jwk::Jwk;
-//use crate::crypto::jwk::compute_jwk_thumbprint;
-//use super::utils::extract_did_fragment;
+use crate::crypto::PublicKey;
+use crate::common::traits::AsStorageBytes;
 
-//use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
 use regex::Regex;
+use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+
+pub use url::Url;
+
+fn method_pattern() -> String {"([a-z0-9]+)".to_string()}
+fn pct_encoded_pattern() -> String {"(?:%[0-9a-fA-F]{2})".to_string()}
+fn id_char_pattern() -> String {format!("(?:[a-zA-Z0-9._-]|{})", pct_encoded_pattern())}
+fn method_id_pattern() -> String {format!("((?:{}*:)*({}+))", id_char_pattern(), id_char_pattern())}
+fn path_pattern() -> String {"(/[^#?]*)?".to_string()}
+fn query_pattern() -> String {"([?][^#]*)?".to_string()}
+fn fragment_pattern() -> String {"(#.*)?".to_string()}
+fn path_query_frag() -> String { format!("(?<path>{})(?<query>{})(?<fragment>{})", path_pattern(), query_pattern(), fragment_pattern()) }
+fn did_pattern() -> String {format!("did:(?<method>{}):(?<id>{})", method_pattern(), method_id_pattern())}
+fn did_uri_pattern() -> String {format!("^{}{}$", did_pattern(), path_query_frag())}
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-pub enum DidMethod {
+pub enum Method {
     DHT
 }
 
-impl std::fmt::Display for DidMethod {
+impl std::fmt::Display for Method {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DHT => write!(f, "dht")
@@ -23,10 +33,10 @@ impl std::fmt::Display for DidMethod {
     }
 }
 
-impl DidMethod {
-    pub fn parse(did_method: &str) -> Result<DidMethod, Error> {
+impl Method {
+    pub fn parse(did_method: &str) -> Result<Method, Error> {
         Ok(match did_method {
-            "dht" => DidMethod::DHT,
+            "dht" => Method::DHT,
             _ => return Err(Error::Parse("did method".to_string(), did_method.to_string()))
         })
     }
@@ -35,7 +45,7 @@ impl DidMethod {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Did {
     pub id: String,
-    pub method: DidMethod
+    pub method: Method
 }
 
 impl std::fmt::Display for Did {
@@ -45,23 +55,97 @@ impl std::fmt::Display for Did {
 }
 
 impl Did {
-    fn method_pattern() -> String {"([a-z0-9]+)".to_string()}
-    fn pct_encoded_pattern() -> String {"(?:%[0-9a-fA-F]{2})".to_string()}
-    fn id_char_pattern() -> String {format!("(?:[a-zA-Z0-9._-]|{})", Self::pct_encoded_pattern())}
-    fn method_id_pattern() -> String {format!("((?:{}*:)*({}+))", Self::id_char_pattern(), Self::id_char_pattern())}
-    fn did_pattern() -> String { format!("did:(?<method>{}):(?<id>{})", Self::method_pattern(), Self::method_id_pattern()) }
-
     pub fn parse(did: &str) -> Result<Did, Error> {
         let error = || Error::Parse("did".to_string(), did.to_string());
-        let captures = Regex::new(&Self::did_pattern())?.captures(did).ok_or(error())?;
-        let method = DidMethod::parse(captures.name("method").ok_or(error())?.as_str())?;
+        let captures = Regex::new(&did_pattern())?.captures(did).ok_or(error())?;
+        let method = Method::parse(captures.name("method").ok_or(error())?.as_str())?;
         let id = captures.name("id").ok_or(error())?.as_str().to_owned();
         Ok(Did{id, method})
     }
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+pub struct DidUri {
+    pub id: String,
+    pub method: Method,
+    pub path: Option<String>,
+    pub query: Option<String>,
+    pub fragment: Option<String>,
+    pub params: Option<HashMap<String, String>>
+}
 
+impl DidUri {
+    pub fn parse(did_uri: String) -> Result<DidUri, Error> {
+        let error = || Error::Parse(did_uri.clone(), "did_uri".to_string());
+        let captures = Regex::new(&did_uri_pattern())?.captures(&did_uri).ok_or(error())?;
+        let method = Method::parse(captures.name("method").ok_or(error())?.as_str())?;
+        let id: String = captures.name("id").ok_or(error())?.as_str().to_owned();
+        let path: Option<String> = captures.name("path").map(|p| p.as_str().to_owned());
+        let (query, params): (Option<String>, Option<HashMap<String, String>>) = match captures.name("query") {
+            None => (None, None),
+            Some(q) => {
+                let query = q.as_str().to_owned()[1..].to_string();
+                let mut params: HashMap<String, String> = HashMap::new();
+                let param_pairs: Vec<&str> = query.split('&').collect();
+                for pair in param_pairs {
+                    let mut iter = pair.split('=');
+                    params.insert(iter.next().ok_or(error())?.to_string(), iter.next().ok_or(error())?.to_string());
+                }
+                (Some(query), Some(params))
+            }
+        };
+        let fragment: Option<String> = captures.name("fragment").map(|f| f.as_str().to_owned()[1..].to_string());
+        Ok(DidUri{id, method, path, query, fragment, params})
+    }
+}
 
+impl std::fmt::Display for DidUri {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "did:{}:{}", self.method, self.id)?;
+        if let Some(path) = &self.path { write!(f, "{}", path)?; }
+        if let Some(query) = &self.query { write!(f, "?{}", query)?; }
+        if let Some(fragment) = &self.fragment { write!(f, "#{}", fragment)?; }
+        Ok(())
+    }
+}
+
+impl AsStorageBytes for DidUri {
+    fn as_storage_bytes(&self) -> Vec<u8> {
+        self.to_string().as_bytes().to_vec()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub enum Type {
+    Discoverable,
+    Organization,
+    Government,
+    Corporation,
+    LocalBusiness,
+    SoftwarePackage,
+    WebApp,
+    FinancialInstitution
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct Service {
+    pub id: Url,
+    pub types: Vec<String>,
+    pub service_endpoints: Vec<Url>,
+    pub enc: Vec<String>,
+    pub sig: Vec<String>
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub enum Purpose {Auth, Asm, Agm, Inv, Del}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct Key {
+    pub id: Option<String>,
+    pub public_key: PublicKey,
+    pub purposes: Vec<Purpose>,
+    pub controller: Option<Did>
+}
 
 
 
@@ -77,12 +161,6 @@ impl Did {
 //  fn id_char_pattern() -> String {format!("(?:[a-zA-Z0-9._-]|{})", pct_encoded_pattern())}
 //  fn did_pattern() -> String { format!("did:(?<method>{}):(?<id>{})", method_pattern(), method_id_pattern()) }
 //  fn method_id_pattern() -> String {format!("((?:{}*:)*({}+))", id_char_pattern(), id_char_pattern())}
-//  fn path_pattern() -> String {"(/[^#?]*)?".to_string()}
-//  fn query_pattern() -> String {"([?][^#]*)?".to_string()}
-//  fn fragment_pattern() -> String {"(#.*)?".to_string()}
-//  fn path_query_frag() -> String { format!("(?<path>{})(?<query>{})(?<fragment>{})", path_pattern(), query_pattern(), fragment_pattern()) }
-//  fn did_uri_pattern() -> String { format!("^{}{}$", did_pattern(), path_query_frag()) }
-
 //  #[derive(Default, Clone, PartialEq, Deserialize, Serialize)]
 //  pub struct Did {
 //      pub id: String,
@@ -118,58 +196,6 @@ impl Did {
 
 
 
-//  #[derive(Clone, Deserialize, Serialize)]
-//  pub struct DidUri {
-//      pub id: String,
-//      pub method: String,
-//      pub path: Option<String>,
-//      pub query: Option<String>,
-//      pub fragment: Option<String>,
-//      pub params: Option<HashMap<String, String>>
-//  }
-
-//  impl DidUri {
-//      pub fn new(method: String, id: String, path: Option<String>, query: Option<String>, fragment: Option<String>, params: Option<HashMap<String, String>>) -> DidUri {
-//          DidUri{method, id, path, query, fragment, params}
-//      }
-
-//      pub fn parse(did_uri: String) -> Result<DidUri, Error> {
-//          let error = || Error::Parse(did_uri.clone(), "did_uri".to_string());
-//          let captures = Regex::new(&did_uri_pattern())?.captures(&did_uri).ok_or(error())?;
-//          let method: String = captures.name("method").ok_or(error())?.as_str().to_owned();
-//          let id: String = captures.name("id").ok_or(error())?.as_str().to_owned();
-//          let path: Option<String> = captures.name("path").map(|p| p.as_str().to_owned());
-//          let (query, params): (Option<String>, Option<HashMap<String, String>>) = match captures.name("query") {
-//              None => (None, None),
-//              Some(q) => {
-//                  let query = q.as_str().to_owned()[1..].to_string();
-//                  let mut params: HashMap<String, String> = HashMap::new();
-//                  let param_pairs: Vec<&str> = query.split('&').collect();
-//                  for pair in param_pairs {
-//                      let mut iter = pair.split('=');
-//                      params.insert(iter.next().ok_or(error())?.to_string(), iter.next().ok_or(error())?.to_string());
-//                  }
-//                  (Some(query), Some(params))
-//              }
-//          };
-//          let fragment: Option<String> = captures.name("fragment").map(|f| f.as_str().to_owned()[1..].to_string());
-//          Ok(DidUri::new(id, method, path, query, fragment, params))
-//      }
-
-//      pub fn did(&self) -> Did {
-//          Did::new(self.id.clone(), self.method.clone())
-//      }
-//  }
-
-//  impl std::fmt::Display for DidUri {
-//      fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//          write!(f, "did:{}:{}", self.method, self.id)?;
-//          if let Some(path) = &self.path { write!(f, "{}", path)?; }
-//          if let Some(query) = &self.query { write!(f, "?{}", query)?; }
-//          if let Some(fragment) = &self.fragment { write!(f, "#{}", fragment)?; }
-//          Ok(())
-//      }
-//  }
 
 //  #[derive(Default, Deserialize, Serialize)]
 //  pub struct DidMetadata {

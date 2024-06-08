@@ -1,9 +1,9 @@
 use super::error::Error;
-use super::did_core::Did;
-use super::did_dht::{DidDht, Type, Key, Purpose, Service, IdentityKey};
+use super::did_core::{Did, Type, Key, Purpose, Service, Url};
+use super::did_dht::{DidDht, DhtKey};
 use crate::crypto::{PublicKey, Curve};
 use crate::common::Convert;
-use url::Url;
+use super::did_method::DidMethod;
 
 use std::collections::HashMap;
 
@@ -118,7 +118,7 @@ impl DhtDns {
             if let Some(id) = &key.id { vm.insert("id".to_string(), id.clone()); }
             let t = Self::key_to_t(&key.public_key);
             vm.insert("t".to_string(), t.to_string());
-            vm.insert("k".to_string(), Convert::Base64UrlUnpadded.encode(key.public_key.as_bytes())?);
+            vm.insert("k".to_string(), Convert::Base64UrlUnpadded.encode(key.public_key.as_bytes()));
             //if let Some(a) = a { vm.insert("a".to_string(), a); }
             if let Some(c) = &key.controller { vm.insert("c".to_string(), c.to_string()); }
             txt_records.insert(
@@ -151,7 +151,6 @@ impl DhtDns {
             );
         }
 
-        let id = Convert::ZBase32.encode(dht.identity_key.public_key.as_bytes())?;
         let mut root_record: HashMap<String, String> = HashMap::new();
         root_record.insert("v".to_string(), DID_DHT_SPECIFICATION_VERSION.to_string());
         root_record.insert("vm".to_string(), vm_ids.join(VALUE_SEPARATOR));
@@ -175,13 +174,13 @@ impl DhtDns {
         }
 
         txt_records.insert(
-            format!("_did.{}.", id.clone()),
+            format!("_did.{}.", dht.id()),
             root_record.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<String>>().join(PROPERTY_SEPARATOR)
         );
 
         let mut ns_records: HashMap<String, String> = HashMap::new();
         for gateway in gateways {
-            ns_records.insert(format!("_did.{}.", id), format!("{}.", gateway));
+            ns_records.insert(format!("_did.{}.", dht.id()), format!("{}.", gateway));
         }
 
         let mut packet = Packet::new_reply(0);
@@ -278,7 +277,7 @@ impl DhtDns {
             Ok(Key{id, public_key, purposes, controller})
         }).collect::<Result<Vec<Key>, Error>>()?;
         let index = keys.iter().position(|k| k.id == Some("0".to_string())).ok_or(error())?;
-        let identity_key = IdentityKey::from_key(keys.remove(index))?;
+        let identity_key = DhtKey::from_key(keys.remove(index))?;
 
         let services = svc_ids.iter().map(|svc_id| {
             let s_record = txt_records.get(&format!("_{}._did", svc_id)).ok_or(error())?.split(PROPERTY_SEPARATOR).map(|kv| {

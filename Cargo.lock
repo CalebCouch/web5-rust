@@ -1863,7 +1863,7 @@ dependencies = [
 name = "web5-rust"
 version = "0.1.0"
 dependencies = [
- "base64ct",
+ "base64",
  "bs58",
  "ed25519-dalek",
  "hex",

@@ -35,8 +35,8 @@ impl PublicKey {
 }
 
 impl AsStorageBytes for PublicKey {
-    fn as_storage_bytes(&self) -> Result<Vec<u8>, CommonError> {
-        Ok(self.as_bytes().to_vec())
+    fn as_storage_bytes(&self) -> Vec<u8> {
+        self.as_bytes().to_vec()
     }
 }
 
@@ -58,12 +58,12 @@ impl SecretKey {
 }
 
 impl AsStorageBytes for SecretKey {
-    fn as_storage_bytes(&self) -> Result<Vec<u8>, CommonError> {
-        Ok(match self {
+    fn as_storage_bytes(&self) -> Vec<u8> {
+        match self {
             SecretKey::Ed(key) => [vec![0], key.to_bytes().to_vec()].concat(),
             SecretKey::K1(_key) => todo!(),
             SecretKey::R1(_key) => todo!()
-        })
+        }
     }
 }
 

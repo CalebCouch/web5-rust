@@ -23,9 +23,9 @@ p256 = {version="0.13.2", features=["serde"]}
 z-base-32 = "0.1.4"
 ed25519-dalek = {version="2.1.1", features=["serde", "rand_core", "alloc"]}
 http = "1.1.0"
-base64ct = "1.6.0"
 simple-dns = "0.7.0"
 rustc-serialize = "0.3.25"
 serde_bencode = "0.2.4"
 url = { version = "2.5.0", features = ["serde"] }
 reqwest = "0.12.4"
+base64 = "0.22.1"
