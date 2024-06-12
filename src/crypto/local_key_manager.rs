@@ -1,25 +1,28 @@
 use super::error::Error;
-use super::common::{PublicKey, SecretKey};
+use super::traits::{PublicKey, SecretKey};
 use crate::common::traits::KeyValueStore;
+use serde_json::to_vec as serialize;
+use serde::Serialize;
 
-pub struct LocalKeyStore<KVS: KeyValueStore<PublicKey, SecretKey>> {
+pub struct LocalKeyStore<KVS: KeyValueStore> {
     store: KVS
 }
 
-impl<KVS: KeyValueStore<PublicKey, SecretKey>> LocalKeyStore<KVS> {
+impl<KVS: KeyValueStore, > LocalKeyStore<KVS> {
     pub fn new(kvs: Option<KVS>) -> Result<Self, Error> {
-        if let Some(kvs) = kvs {
-            return Ok(LocalKeyStore{store: kvs});
-        }
-        Ok(LocalKeyStore{store: KVS::default()?})
+        let kvs = kvs.unwrap_or(KVS::default()?);
+        Ok(LocalKeyStore{store: kvs})
     }
 
-    pub fn store_key(&mut self, secret_key: &SecretKey) -> Result<(), Error> {
-        self.store.set(&secret_key.public_key(), secret_key)?;
+    pub fn store_key<K: PublicKey + Serialize, V: SecretKey<K>>(&mut self, secret_key: &V) -> Result<(), Error> {
+        self.store.set(&serialize(&secret_key.public_key())?, secret_key.as_bytes())?;
         Ok(())
     }
 
-    pub fn get_key(&self, public_key: &PublicKey) -> Result<Option<SecretKey>, Error> {
-        Ok(self.store.get(public_key)?)
+    pub fn get_key<K: PublicKey + Serialize, V: SecretKey<K>>(&self, public_key: &K) -> Result<Option<V>, Error> {
+        Ok(match self.store.get(&serialize(&public_key)?)? {
+            None => None,
+            Some(b) => Some(V::from_bytes(&b)?)
+        })
     }
 }

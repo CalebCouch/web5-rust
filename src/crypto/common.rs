@@ -1,87 +1,51 @@
 use super::error::Error;
 use super::{ed25519, secp256k1, secp256r1};
-use super::traits::{ToPublicKey};
-use crate::common::traits::{FromStorageBytes, AsStorageBytes};
-use crate::common::Error as CommonError;
 use serde::{Deserialize, Serialize};
-
+use super::traits::PublicKey;
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub enum Curve { Ed, K1, R1 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-pub enum PublicKey {
+pub enum GenericPublicKey {
     Ed(ed25519::PublicKey),
     K1(secp256k1::PublicKey),
     R1(secp256r1::PublicKey)
 }
 
-impl PublicKey {
-    pub fn from_bytes(curve: Curve, bytes: &[u8]) -> Result<PublicKey, Error> {
-        Ok(match curve {
-            Curve::Ed => PublicKey::Ed(ed25519::PublicKey::from_bytes(bytes.try_into().or(Err(Error::Parse("Ed(PublicKey)".to_string(), hex::encode(bytes))))?)?),
-            Curve::K1 => todo!(),
-            Curve::R1 => todo!(),
-        })
-    }
-
+impl GenericPublicKey {
     pub fn as_bytes(&self) -> &[u8] {
         match self {
-            PublicKey::Ed(key) => key.as_bytes(),
-            PublicKey::K1(_key) => todo!(),
-            PublicKey::R1(_key) => todo!()
+            Self::Ed(key) => key.as_bytes(),
+            Self::K1(key) => key.as_bytes(),
+            Self::R1(key) => key.as_bytes(),
+        }
+    }
+    pub fn from_bytes(c: Curve, b: &[u8]) -> Result<Self, Error> where Self: Sized {
+        Ok(match c {
+            Curve::Ed => Self::Ed(PublicKey::from_bytes(b)?),
+            Curve::K1 => Self::K1(PublicKey::from_bytes(b)?),
+            Curve::R1 => Self::R1(PublicKey::from_bytes(b)?)
+        })
+    }
+    pub fn curve(&self) -> Curve {
+        match self {
+            Self::Ed(key) => key.curve(),
+            Self::K1(key) => key.curve(),
+            Self::R1(key) => key.curve(),
         }
     }
 }
 
-impl AsStorageBytes for PublicKey {
-    fn as_storage_bytes(&self) -> Vec<u8> {
-        self.as_bytes().to_vec()
-    }
-}
-
 #[derive(Clone)]
-pub enum SecretKey {
+pub enum GenericSecretKey {
     Ed(ed25519::SecretKey),
     K1(secp256k1::SecretKey),
     R1(secp256r1::SecretKey)
 }
 
-impl SecretKey {
-    pub fn public_key(&self) -> PublicKey {
-        match self {
-            SecretKey::Ed(key) => PublicKey::Ed(key.public_key()),
-            SecretKey::K1(key) => PublicKey::K1(key.public_key()),
-            SecretKey::R1(key) => PublicKey::R1(key.public_key()),
-        }
-    }
-}
-
-impl AsStorageBytes for SecretKey {
-    fn as_storage_bytes(&self) -> Vec<u8> {
-        match self {
-            SecretKey::Ed(key) => [vec![0], key.to_bytes().to_vec()].concat(),
-            SecretKey::K1(_key) => todo!(),
-            SecretKey::R1(_key) => todo!()
-        }
-    }
-}
-
-impl FromStorageBytes for SecretKey {
-    fn from_storage_bytes(b: &[u8]) -> Result<Self, CommonError> {
-        Ok(match b.first().ok_or(CommonError::FromStorageBytes())? {
-            0 => SecretKey::Ed(ed25519::SecretKey::from_bytes(b[1..].try_into().or(Err(CommonError::FromStorageBytes()))?)),
-            1 => todo!(),//SecretKey::K1(secp256k1::SecretKey::from_slice(&b[1..])?),
-            2 => todo!(),
-            _ => return Err(CommonError::FromStorageBytes())
-        })
-    }
-}
-
-
-
 #[derive(Clone)]
-pub enum Signature {
+pub enum GenericSignature {
     Ed(ed25519::Signature),
     K1(secp256k1::Signature),
     R1(secp256r1::Signature)

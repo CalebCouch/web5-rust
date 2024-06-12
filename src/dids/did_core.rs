@@ -1,8 +1,6 @@
 use super::error::Error;
 
-use crate::crypto::PublicKey;
-use crate::common::traits::AsStorageBytes;
-
+use crate::crypto::common::GenericPublicKey;
 use regex::Regex;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -64,7 +62,7 @@ impl Did {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct DidUri {
     pub id: String,
     pub method: Method,
@@ -75,15 +73,16 @@ pub struct DidUri {
 }
 
 impl DidUri {
-    pub fn parse(did_uri: String) -> Result<DidUri, Error> {
-        let error = || Error::Parse(did_uri.clone(), "did_uri".to_string());
+    pub fn parse(did_uri: &str) -> Result<DidUri, Error> {
+        let error = || Error::Parse(did_uri.to_string(), "did_uri".to_string());
         let captures = Regex::new(&did_uri_pattern())?.captures(&did_uri).ok_or(error())?;
-        let method = Method::parse(captures.name("method").ok_or(error())?.as_str())?;
-        let id: String = captures.name("id").ok_or(error())?.as_str().to_owned();
-        let path: Option<String> = captures.name("path").map(|p| p.as_str().to_owned());
-        let (query, params): (Option<String>, Option<HashMap<String, String>>) = match captures.name("query") {
+        let method = Method::parse(captures.name("method").filter(|s| !s.as_str().is_empty()).ok_or(error())?.as_str())?;
+        let id: String = captures.name("id").filter(|s| !s.as_str().is_empty()).ok_or(error())?.as_str().to_owned();
+        let path: Option<String> = captures.name("path").filter(|s| !s.as_str().is_empty()).map(|p| p.as_str().to_owned());
+        let (query, params): (Option<String>, Option<HashMap<String, String>>) = match captures.name("query").filter(|s| !s.as_str().is_empty()) {
             None => (None, None),
             Some(q) => {
+                println!("{:?}", q);
                 let query = q.as_str().to_owned()[1..].to_string();
                 let mut params: HashMap<String, String> = HashMap::new();
                 let param_pairs: Vec<&str> = query.split('&').collect();
@@ -94,7 +93,7 @@ impl DidUri {
                 (Some(query), Some(params))
             }
         };
-        let fragment: Option<String> = captures.name("fragment").map(|f| f.as_str().to_owned()[1..].to_string());
+        let fragment: Option<String> = captures.name("fragment").filter(|s| !s.as_str().is_empty()).map(|f| f.as_str().to_owned()[1..].to_string());
         Ok(DidUri{id, method, path, query, fragment, params})
     }
 }
@@ -106,12 +105,6 @@ impl std::fmt::Display for DidUri {
         if let Some(query) = &self.query { write!(f, "?{}", query)?; }
         if let Some(fragment) = &self.fragment { write!(f, "#{}", fragment)?; }
         Ok(())
-    }
-}
-
-impl AsStorageBytes for DidUri {
-    fn as_storage_bytes(&self) -> Vec<u8> {
-        self.to_string().as_bytes().to_vec()
     }
 }
 
@@ -142,7 +135,7 @@ pub enum Purpose {Auth, Asm, Agm, Inv, Del}
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Key {
     pub id: Option<String>,
-    pub public_key: PublicKey,
+    pub public_key: GenericPublicKey,
     pub purposes: Vec<Purpose>,
     pub controller: Option<Did>
 }

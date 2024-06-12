@@ -21,6 +21,8 @@ pub enum Error {
     #[error(transparent)]
     SimpleDns(#[from] simple_dns::SimpleDnsError),
     #[error(transparent)]
+    SerdeJson(#[from] serde_json::Error),
+    #[error(transparent)]
     UrlParse(#[from] url::ParseError),
     #[error("Could not find secret key in key store")]
     KeyNotFound(),

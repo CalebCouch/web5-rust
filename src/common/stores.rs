@@ -1,27 +1,17 @@
 use super::error::Error;
 use super::traits::{KeyValueStore, KeyValueCache};
-use super::traits::{AsStorageBytes, FromStorageBytes};
 use leveldb_rs::{DB, DBOptions};
 use std::collections::HashMap;
 use std::path::Path;
-use std::marker::PhantomData;
 
+use serde::{Serialize, Deserialize};
 use std::time::{UNIX_EPOCH, SystemTime};
+use serde_json::to_vec as serialize;
+use serde_json::from_slice as deserialize;
 
+#[derive(Serialize, Deserialize)]
 pub struct StorableData {
     data: Vec<u8>
-}
-
-impl AsStorageBytes for StorableData {
-    fn as_storage_bytes(&self) -> Vec<u8> {
-        self.data.clone()
-    }
-}
-
-impl FromStorageBytes for StorableData {
-    fn from_storage_bytes(b: &[u8]) -> Result<Self, Error> {
-        Ok(StorableData{data: b.to_vec()})
-    }
 }
 
 pub struct LevelStore {
@@ -44,7 +34,7 @@ impl LevelStore {
     }
 }
 
-impl<K: AsStorageBytes + Send, V: FromStorageBytes + AsStorageBytes + Send> KeyValueStore<K, V> for LevelStore {
+impl KeyValueStore for LevelStore {
     fn default() -> Result<LevelStore, Error> {
         LevelStore::new(None, None)
     }
@@ -63,102 +53,70 @@ impl<K: AsStorageBytes + Send, V: FromStorageBytes + AsStorageBytes + Send> KeyV
         self.db = None;
         Ok(())
     }
-    fn delete(&mut self, key: &K) -> Result<bool, Error> {
+    fn delete(&mut self, key: &[u8]) -> Result<bool, Error> {
         let db = self.db.as_mut().ok_or(Error::DataStore())?;
-        let key = key.as_storage_bytes();
-        let result = db.get(&key)?.is_some();
-        db.delete(&key)?;
+        let result = db.get(key)?.is_some();
+        db.delete(key)?;
         Ok(result)
     }
-    fn get(&self, key: &K) -> Result<Option<V>, Error> {
-        Ok(self.db.as_ref().ok_or(Error::DataStore())?.get(&key.as_storage_bytes())?.as_ref().and_then(|v| V::from_storage_bytes(v).ok()))
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+        Ok(self.db.as_ref().ok_or(Error::DataStore())?.get(key)?)
     }
-    fn set(&mut self, key: &K, value: &V) -> Result<(), Error> {
-        Ok(self.db.as_mut().ok_or(Error::DataStore())?.put(&key.as_storage_bytes(), &value.as_storage_bytes())?)
+    fn set(&mut self, key: &[u8], value: &[u8]) -> Result<(), Error> {
+        Ok(self.db.as_mut().ok_or(Error::DataStore())?.put(key, value)?)
     }
 }
 
 pub struct MemoryStore {
-    store: HashMap<Vec<u8>, Vec<u8>>
+    store: HashMap<Vec<u8>, Vec<u8>>,
+    partitions: HashMap<String, MemoryStore>
 }
 
-impl<K: AsStorageBytes + Send, V: FromStorageBytes + AsStorageBytes + Send> KeyValueStore<K, V> for MemoryStore {
+impl KeyValueStore for MemoryStore {
     fn default() -> Result<MemoryStore, Error> {
-        Ok(MemoryStore{store: HashMap::new()})
+        Ok(MemoryStore{store: HashMap::new(), partitions: HashMap::new()})
     }
     fn clear(&mut self) -> Result<(), Error> {
         self.store.clear();
         Ok(())
     }
     fn close(&mut self) -> Result<(), Error> {Ok(())}
-    fn delete(&mut self, key: &K) -> Result<bool, Error> {
-        Ok(self.store.remove(&key.as_storage_bytes()).is_some())
+    fn delete(&mut self, key: &[u8]) -> Result<bool, Error> {
+        Ok(self.store.remove(key).is_some())
     }
-    fn get(&self, key: &K) -> Result<Option<V>, Error> {
-        Ok(match self.store.get(&key.as_storage_bytes().to_vec()) {
-            None => None,
-            Some(v) => Some(V::from_storage_bytes(v)?)
-        })
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+        Ok(self.store.get(key).cloned())
     }
-    fn set(&mut self, key: &K, value: &V) -> Result<(), Error> {
-        self.store.insert(key.as_storage_bytes().to_vec(), value.as_storage_bytes().to_vec());
+    fn set(&mut self, key: &[u8], value: &[u8]) -> Result<(), Error> {
+        self.store.insert(key.to_vec(), value.to_vec());
         Ok(())
     }
 }
 
-pub struct CacheWrapper<V: AsStorageBytes + FromStorageBytes + Send> {
+#[derive(Serialize, Deserialize)]
+pub struct CacheWrapper {
   exp: u64,
-  value: V
-}
-
-impl<V: AsStorageBytes + FromStorageBytes + Send> AsStorageBytes for CacheWrapper<V> {
-    fn as_storage_bytes(&self) -> Vec<u8> {
-        [self.exp.to_be_bytes().to_vec(), self.value.as_storage_bytes()].concat()
-    }
-}
-
-impl<V: AsStorageBytes + FromStorageBytes + Send> FromStorageBytes for CacheWrapper<V> {
-    fn from_storage_bytes(b: &[u8]) -> Result<Self, Error> {
-        if b.len() < 9 { return Err(Error::FromStorageBytes()); }
-        Ok(CacheWrapper{
-            exp: u64::from_be_bytes(b[..8].try_into()?),
-            value: V::from_storage_bytes(&b[8..])?
-        })
-    }
+  value: Vec<u8>
 }
 
 const DEFAULT_CACHE_TTL: u64 = 900000;
 
-pub struct Cache<
-    K: AsStorageBytes + Send,
-    V: AsStorageBytes + FromStorageBytes + Send,
-    KVS: KeyValueStore<K, CacheWrapper<V>> + Sized
-> {
+pub struct Cache<KVS: KeyValueStore + Sized> {
     store: KVS,
-    ttl: u64,
-    key_type: PhantomData<K>,
-    value_type: PhantomData<V>
+    ttl: u64
 }
 
-impl<
-    K: AsStorageBytes + Send,
-    V: AsStorageBytes + FromStorageBytes + Send,
-    KVS: KeyValueStore<K, CacheWrapper<V>> + Sized
-> Cache<K, V, KVS> {
+impl<KVS: KeyValueStore + Sized> Cache<KVS> {
     pub fn new(kvs: Option<KVS>, ttl: Option<u64>) -> Result<Self, Error> {
         let kvs = kvs.unwrap_or(KVS::default()?);
         let ttl = ttl.unwrap_or(DEFAULT_CACHE_TTL);
-        Ok(Cache{store: kvs, ttl, key_type: PhantomData, value_type: PhantomData})
+        Ok(Cache{store: kvs, ttl})
     }
 }
 
-impl<
-    K: AsStorageBytes + Send,
-    V: FromStorageBytes + AsStorageBytes + Send,
-    KVS: KeyValueStore<K, CacheWrapper<V>> + Sized
-> KeyValueCache<K, V> for Cache<K, V, KVS> {
-    fn default() -> Result<Cache<K, V, KVS>, Error> {
-        Ok(Cache{store: KVS::default()?, ttl: DEFAULT_CACHE_TTL, key_type: PhantomData, value_type: PhantomData})
+impl<KVS: KeyValueStore + Sized> KeyValueCache for Cache<KVS> {
+    fn default() -> Result<Self, Error> {
+        Ok(Cache{store: KVS::default()?, ttl: DEFAULT_CACHE_TTL})
     }
     fn clear(&mut self) -> Result<(), Error> {
         self.store.clear()
@@ -166,11 +124,12 @@ impl<
     fn close(&mut self) -> Result<(), Error> {
         self.store.close()
     }
-    fn delete(&mut self, key: &K) -> Result<bool, Error> {
+    fn delete(&mut self, key: &[u8]) -> Result<bool, Error> {
         self.store.delete(key)
     }
-    fn get(&mut self, key: &K) -> Result<Option<V>, Error> {
+    fn get(&mut self, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
         if let Some(cache) = self.store.get(key)? {
+            let cache = deserialize::<CacheWrapper>(&cache)?;
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() * 1000;
             if now >= cache.exp {
                 self.store.delete(key)?;
@@ -180,10 +139,10 @@ impl<
         }
         Ok(None)
     }
-    fn set(&mut self, key: &K, value: V) -> Result<(), Error> {
+    fn set(&mut self, key: &[u8], value: &[u8]) -> Result<(), Error> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() * 1000;
-        let value = CacheWrapper{exp: now+self.ttl, value: value};
-        self.store.set(key, &value)
+        let value = CacheWrapper{exp: now+self.ttl, value: value.to_vec()};
+        self.store.set(key, &serialize(&value)?)
     }
 }
 

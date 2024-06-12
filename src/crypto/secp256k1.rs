@@ -1,4 +1,8 @@
-use super::traits::{CryptoAlgorithm, ToPublicKey};
+use super::error::Error;
+use super::common::Curve;
+use super::traits::CryptoAlgorithm;
+use super::traits;
+
 
 use rand::rngs::OsRng;
 use k256::ecdsa::signature::{Signer, Verifier};
@@ -23,8 +27,27 @@ impl CryptoAlgorithm<SecretKey, PublicKey, Signature> for Secp256k1 {
     }
 }
 
-impl ToPublicKey<PublicKey> for SecretKey {
-    fn public_key(&self) -> PublicKey {
+impl traits::PublicKey for PublicKey {
+    fn as_bytes(&self) -> &[u8] {
         todo!()
     }
+    fn from_bytes(_b: &[u8]) -> Result<PublicKey, Error> {
+        todo!()
+    }
+    fn curve(&self) -> Curve { Curve::K1 }
 }
+
+impl traits::SecretKey<PublicKey> for SecretKey {
+    fn public_key(&self) -> PublicKey {
+        *self.verifying_key()
+    }
+    fn as_bytes(&self) -> &[u8] {
+        todo!()
+    }
+    fn from_bytes(_b: &[u8]) -> Result<SecretKey, Error> {
+        todo!()
+    }
+    fn curve(&self) -> Curve { Curve::K1 }
+}
+
+impl traits::Signature for Signature {}

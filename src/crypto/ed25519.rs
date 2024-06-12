@@ -1,4 +1,7 @@
-use super::traits::{CryptoAlgorithm, ToPublicKey};
+use super::error::Error;
+use super::common::Curve;
+use super::traits::CryptoAlgorithm;
+use super::traits;
 
 use rand::rngs::OsRng;
 
@@ -24,8 +27,27 @@ impl CryptoAlgorithm<SecretKey, PublicKey, Signature> for Ed25519 {
     }
 }
 
-impl ToPublicKey<PublicKey> for SecretKey {
+impl traits::PublicKey for PublicKey {
+    fn as_bytes(&self) -> &[u8] {
+        todo!()
+    }
+    fn from_bytes(b: &[u8]) -> Result<PublicKey, Error> {
+        Ok(PublicKey::from_bytes(b.try_into()?)?)
+    }
+    fn curve(&self) -> Curve { Curve::Ed }
+}
+
+impl traits::SecretKey<PublicKey> for SecretKey {
     fn public_key(&self) -> PublicKey {
         self.verifying_key()
     }
+    fn as_bytes(&self) -> &[u8] {
+        self.as_bytes()
+    }
+    fn from_bytes(b: &[u8]) -> Result<SecretKey, Error> {
+        Ok(SecretKey::from_bytes(b.try_into()?))
+    }
+    fn curve(&self) -> Curve { Curve::Ed }
 }
+
+impl traits::Signature for Signature {}

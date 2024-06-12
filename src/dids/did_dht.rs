@@ -1,12 +1,11 @@
 use super::error::Error;
 
 use crate::common::Convert;
-use crate::common::traits::{KeyValueStore, AsStorageBytes, FromStorageBytes};
-use crate::common::Error as CommonError;
-
+use crate::common::traits::KeyValueStore;
 use crate::crypto::ed25519::Ed25519;
-use crate::crypto::traits::{CryptoAlgorithm, ToPublicKey};
-use crate::crypto::{ed25519, PublicKey, SecretKey, LocalKeyStore};
+use crate::crypto::traits::{CryptoAlgorithm, SecretKey as SecretKeyTrait};
+use crate::crypto::{ed25519, LocalKeyStore};
+use crate::crypto::common::GenericPublicKey;
 
 pub use super::did_method::DidMethod;
 
@@ -30,7 +29,7 @@ impl DhtKey {
     pub fn from_key(key: Key) -> Result<Self, Error> {
         let error = || Error::Parse("DhtKey".to_string(), format!("{:?}", key));
         if key.id != Some("0".to_string()) { return Err(error()); }
-        if let PublicKey::Ed(public_key) = key.public_key {
+        if let GenericPublicKey::Ed(public_key) = key.public_key {
             Ok(DhtKey{public_key, purposes: key.purposes, controller: key.controller})
         } else { Err(error()) }
     }
@@ -40,7 +39,7 @@ impl DhtKey {
     pub fn to_key(&self) -> Key {
         Key{
             id: Some("0".to_string()),
-            public_key: PublicKey::Ed(self.public_key),
+            public_key: GenericPublicKey::Ed(self.public_key),
             purposes: self.purposes.clone(),
             controller: self.controller.clone()
         }
@@ -61,11 +60,11 @@ impl DidMethod for DidDht {
     fn method() -> Method { Method::DHT }
     fn id(&self) -> String {Convert::ZBase32.encode(self.identity_key.public_key.as_bytes())}
 
-    fn new<KVS: KeyValueStore<PublicKey, SecretKey>>(key_store: &mut LocalKeyStore<KVS>) -> Result<Self, Error> {
+    fn new<KVS: KeyValueStore>(key_store: &mut LocalKeyStore<KVS>) -> Result<Self, Error> {
         Self::create(key_store, vec![], vec![], vec![], vec![], vec![])
     }
 
-    fn create<KVS: KeyValueStore<PublicKey, SecretKey>>(
+    fn create<KVS: KeyValueStore>(
         key_store: &mut LocalKeyStore<KVS>,
         also_known_as: Vec<Url>,
         controllers: Vec<Did>,
@@ -75,7 +74,7 @@ impl DidMethod for DidDht {
     ) -> Result<Self, Error> {
         let secret_key: ed25519::SecretKey = Ed25519::generate_key();
         let public_key: ed25519::PublicKey = secret_key.public_key();
-        key_store.store_key(&SecretKey::Ed(secret_key))?;
+        key_store.store_key(&secret_key)?;
         let identity_key = DhtKey{
             public_key,
             purposes: vec![Purpose::Auth, Purpose::Asm, Purpose::Inv, Purpose::Del],
@@ -84,14 +83,14 @@ impl DidMethod for DidDht {
         Ok(DidDht{identity_key, also_known_as, controllers, services, keys, types})
     }
 
-    async fn publish<KVS: KeyValueStore<PublicKey, SecretKey>>(
+    async fn publish<KVS: KeyValueStore>(
         &self,
         key_store: &LocalKeyStore<KVS>,
         gateway: Option<Url>
     ) -> Result<(), Error> {
         let gateway = gateway.unwrap_or(Url::parse(DEFAULT_GATEWAY_URI)?);
         let public_key = self.identity_key.public_key;
-        if let Some(SecretKey::Ed(secret_key)) = key_store.get_key(&PublicKey::Ed(public_key))? {
+        if let Some(secret_key) = key_store.get_key(&public_key)? {
             let id = self.id();
             let url = gateway.join(&id)?;
             PkarrRelay::put(
@@ -102,21 +101,9 @@ impl DidMethod for DidDht {
         } else { Err(Error::KeyNotFound()) }
     }
 
-    async fn resolve(gateway: Option<Url>, id: String) -> Result<Self, Error> {
+    async fn resolve(gateway: Option<Url>, id: &str) -> Result<Self, Error> {
         let gateway = gateway.unwrap_or(Url::parse(DEFAULT_GATEWAY_URI)?);
-        let packet = PkarrRelay::get(gateway.join(&id)?).await?;
+        let packet = PkarrRelay::get(gateway.join(id)?).await?;
         DhtDns::from_bytes(&packet[64+8..], id)
-    }
-}
-
-impl AsStorageBytes for DidDht {
-    fn as_storage_bytes(&self) -> Vec<u8> {
-        serde_json::to_string(self).unwrap().as_bytes().to_vec()
-    }
-}
-
-impl FromStorageBytes for DidDht {
-    fn from_storage_bytes(b: &[u8]) -> Result<Self, CommonError> {
-        Ok(serde_json::from_str(std::str::from_utf8(b)?)?)
     }
 }

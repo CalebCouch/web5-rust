@@ -1,7 +1,7 @@
 use super::error::Error;
 use super::did_core::{Did, Type, Key, Purpose, Service, Url};
 use super::did_dht::{DidDht, DhtKey};
-use crate::crypto::{PublicKey, Curve};
+use crate::crypto::common::{Curve, GenericPublicKey};
 use crate::common::Convert;
 use super::did_method::DidMethod;
 
@@ -18,23 +18,23 @@ const VALUE_SEPARATOR: &str = ",";
 pub struct DhtDns {}
 
 impl DhtDns {
-    fn key_to_ta(key: &PublicKey) -> (u8, Option<String>) {
-        match key {
-            PublicKey::Ed(_) => (0, None),
-            PublicKey::K1(_) => (1, Some("ES256K".to_string())),
-            PublicKey::R1(_) => (2, Some("ES256".to_string()))
+    fn key_to_ta(key: &GenericPublicKey) -> (u8, Option<String>) {
+        match key.curve() {
+            Curve::Ed => (0, None),
+            Curve::K1 => (1, Some("ES256K".to_string())),
+            Curve::R1 => (2, Some("ES256".to_string()))
         }
     }
 
-    fn key_to_t(key: &PublicKey) -> u8 {
-        match key {
-            PublicKey::Ed(_) => 0,
-            PublicKey::K1(_) => 1,
-            PublicKey::R1(_) => 2
+    fn key_to_t(key: &GenericPublicKey) -> u8 {
+        match key.curve() {
+            Curve::Ed => 0,
+            Curve::K1 => 1,
+            Curve::R1 => 2
         }
     }
 
-    fn kt_to_key(k: &str, t: &str) -> Result<PublicKey, Error> {
+    fn kt_to_key(k: &str, t: &str) -> Result<GenericPublicKey, Error> {
         let bytes = Convert::Base64UrlUnpadded.decode(k)?;
         let curve = match t {
             "0" => Curve::Ed,
@@ -42,7 +42,7 @@ impl DhtDns {
             "2" => Curve::R1,
             _ => {return Err(Error::Parse("Curve".to_string(), t.to_string()));}
         };
-        Ok(PublicKey::from_bytes(curve, &bytes)?)
+        Ok(GenericPublicKey::from_bytes(curve, &bytes)?)
     }
 
     fn type_to_i(r#type: &Type) -> String {
@@ -210,7 +210,7 @@ impl DhtDns {
         Ok(packet.build_bytes_vec()?)
     }
 
-    pub fn from_bytes(packet: &[u8], id: String) -> Result<DidDht, Error> {
+    pub fn from_bytes(packet: &[u8], id: &str) -> Result<DidDht, Error> {
         let error = || Error::Parse("dht dns packet".to_string(), hex::encode(packet));
         let packet = Packet::parse(packet)?;
         let mut txt_records: HashMap<String, String> = HashMap::new();
