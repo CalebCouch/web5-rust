@@ -13,10 +13,17 @@ pub enum Error {
     SerdeJson(#[from] serde_json::Error),
     #[error(transparent)]
     Ed25519(#[from] ed25519_dalek::ed25519::Error),
+    #[error(transparent)]
+    LibSecp256K1(#[from] libsecp256k1_core::Error),
+    #[error(transparent)]
+    JWTK(#[from] jwtk::Error),
+
+    #[error("Downcast failed")]
+    DowncastFailure(),
     #[error("{0}")]
     JoseB64(String),
-    #[error("No thumbprint was found for JWK under s256")]
-    NoThumbprint(),
+    #[error("Thumbprint could not be calculated for PublicKey")]
+    Thumbprint(),
     #[error("Invalid key provided. Must be an elliptic curve (EC) private key")]
     InvalidSecretKey(),
     #[error("The type of curve is not supported by the chosen algorithm: {0}")]
@@ -26,7 +33,8 @@ pub enum Error {
     #[error("Jwk was not a private key")]
     NotSecretJwk(),
 
-    
+    #[error("{0} is not supported for {1}")]
+    Unsupported(String, String),
 }
 
 impl From<jose_b64::base64ct::InvalidLengthError> for Error {

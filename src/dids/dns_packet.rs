@@ -1,7 +1,10 @@
 use super::error::Error;
-use super::did_core::{Did, Type, Key, Purpose, Service, Url};
+use super::did_core::{Did, Type, DidKey, Purpose, Service, Url, Keys};
 use super::did_dht::{DidDht, DhtKey};
-use crate::crypto::common::{Curve, GenericPublicKey};
+use crate::crypto::common::{Curve};
+use crate::crypto::traits;
+use crate::crypto::traits::{AmbiguousKey as _};
+use crate::crypto::{ed25519, secp256k1, secp256r1};
 use crate::common::Convert;
 use super::did_method::DidMethod;
 
@@ -18,31 +21,22 @@ const VALUE_SEPARATOR: &str = ",";
 pub struct DhtDns {}
 
 impl DhtDns {
-    fn key_to_ta(key: &GenericPublicKey) -> (u8, Option<String>) {
-        match key.curve() {
-            Curve::Ed => (0, None),
-            Curve::K1 => (1, Some("ES256K".to_string())),
-            Curve::R1 => (2, Some("ES256".to_string()))
-        }
-    }
-
-    fn key_to_t(key: &GenericPublicKey) -> u8 {
+    fn key_to_t(key: &Box<dyn traits::PublicKey>) -> String {
         match key.curve() {
             Curve::Ed => 0,
             Curve::K1 => 1,
             Curve::R1 => 2
-        }
+        }.to_string()
     }
 
-    fn kt_to_key(k: &str, t: &str) -> Result<GenericPublicKey, Error> {
-        let bytes = Convert::Base64UrlUnpadded.decode(k)?;
-        let curve = match t {
-            "0" => Curve::Ed,
-            "1" => Curve::K1,
-            "2" => Curve::R1,
-            _ => {return Err(Error::Parse("Curve".to_string(), t.to_string()));}
-        };
-        Ok(GenericPublicKey::from_bytes(curve, &bytes)?)
+    fn kt_to_key(k: &str, t: &str) -> Result<Box<dyn traits::PublicKey>, Error> {
+        let bytes = &Convert::Base64UrlUnpadded.decode(k)?;
+        Ok(match t {
+            "0" => Box::new(ed25519::PublicKey::from_bytes(bytes)?),
+            "1" => Box::new(secp256k1::PublicKey::from_bytes(bytes)?),
+            "2" => Box::new(secp256r1::PublicKey::from_bytes(bytes)?),
+            _ => {return Err(Error::Parse("traits::PublicKey".to_string(), format!("k: {}, t: {}", k, t)));}
+        })
     }
 
     fn type_to_i(r#type: &Type) -> String {
@@ -68,7 +62,7 @@ impl DhtDns {
             "5" => Type::SoftwarePackage,
             "6" => Type::WebApp,
             "7" => Type::FinancialInstitution,
-            _ => return Err(Error::Parse("dht type".to_string(), i.to_string()))
+            _ => return Err(Error::Parse("DhtType".to_string(), i.to_string()))
         })
     }
 
@@ -96,7 +90,7 @@ impl DhtDns {
             );
         }
 
-        let keys: Vec<Key> = [vec![dht.identity_key.to_key()], dht.keys.clone()].concat();
+        let keys: Vec<&DidKey> = dht.keys();
         let mut auth: Vec<String> = Vec::new();
         let mut asm: Vec<String> = Vec::new();
         let mut agm: Vec<String> = Vec::new();
@@ -108,19 +102,19 @@ impl DhtDns {
             let name = format!("k{}", index);
             vm_ids.push(name.clone());
 
-            if key.purposes.contains(&Purpose::Auth) { auth.push(name.clone()); }
-            if key.purposes.contains(&Purpose::Asm) { asm.push(name.clone()); }
-            if key.purposes.contains(&Purpose::Agm) { agm.push(name.clone()); }
-            if key.purposes.contains(&Purpose::Inv) { inv.push(name.clone()); }
-            if key.purposes.contains(&Purpose::Del) { del.push(name.clone()); }
+            if key.purposes().contains(&Purpose::Auth) { auth.push(name.clone()); }
+            if key.purposes().contains(&Purpose::Asm) { asm.push(name.clone()); }
+            if key.purposes().contains(&Purpose::Agm) { agm.push(name.clone()); }
+            if key.purposes().contains(&Purpose::Inv) { inv.push(name.clone()); }
+            if key.purposes().contains(&Purpose::Del) { del.push(name.clone()); }
 
             let mut vm: HashMap<String, String> = HashMap::new();
-            if let Some(id) = &key.id { vm.insert("id".to_string(), id.clone()); }
-            let t = Self::key_to_t(&key.public_key);
+            if key.id() != &key.thumbprint()? { vm.insert("id".to_string(), key.id().clone()); }
+            let t = Self::key_to_t(key.public_key());
             vm.insert("t".to_string(), t.to_string());
-            vm.insert("k".to_string(), Convert::Base64UrlUnpadded.encode(key.public_key.as_bytes()));
+            vm.insert("k".to_string(), Convert::Base64UrlUnpadded.encode(&key.public_key().to_vec()));
             //if let Some(a) = a { vm.insert("a".to_string(), a); }
-            if let Some(c) = &key.controller { vm.insert("c".to_string(), c.to_string()); }
+            if let Some(c) = &key.controller() { vm.insert("c".to_string(), c.to_string()); }
             txt_records.insert(
                 format!("_{}._did.", name),
                 vm.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<String>>().join(PROPERTY_SEPARATOR)
@@ -251,7 +245,7 @@ impl DhtDns {
         let del: Vec<String> = root_record.get("del").unwrap_or(&Vec::new()).to_vec();
         let svc_ids: Vec<String> = root_record.get("svc_ids").unwrap_or(&Vec::new()).to_vec();
 
-        let mut keys = vm_ids.iter().map(|vm_id| -> Result<Key, Error> {
+        let keys_vec = vm_ids.iter().map(|vm_id| -> Result<DidKey, Error> {
             let k_record = txt_records.get(&format!("_{}._did", vm_id)).ok_or(error())?.split(PROPERTY_SEPARATOR).map(|kv| {
                 let s: Vec<&str> = kv.split('=').collect();
                 Ok((
@@ -273,11 +267,23 @@ impl DhtDns {
                 Some(Purpose::Inv).filter(|_| inv.contains(vm_id)),
                 Some(Purpose::Del).filter(|_| del.contains(vm_id)),
             ].into_iter().flatten().collect();
-            let id = k_record.get("id").cloned();
-            Ok(Key{id, public_key, purposes, controller})
-        }).collect::<Result<Vec<Key>, Error>>()?;
-        let index = keys.iter().position(|k| k.id == Some("0".to_string())).ok_or(error())?;
-        let identity_key = DhtKey::from_key(keys.remove(index))?;
+
+            let id = if vm_id.as_str() == "k0" {
+                Some("0".to_string())
+            } else {
+                k_record.get("id").cloned()
+            };
+
+            Ok(DidKey::new(id, public_key, purposes, controller)?)
+        }).collect::<Result<Vec<DidKey>, Error>>()?;
+        let mut keys: Keys = Keys::default();
+        for key in &keys_vec {
+            if key.id() != "0" {
+                keys.insert(key)?
+            }
+        }
+        let identity_key: DhtKey = DhtKey::from_key(keys_vec.into_iter().filter(|k| k.id() == "0").collect::<Vec<DidKey>>().first().ok_or(error())?.clone())?;
+
 
         let services = svc_ids.iter().map(|svc_id| {
             let s_record = txt_records.get(&format!("_{}._did", svc_id)).ok_or(error())?.split(PROPERTY_SEPARATOR).map(|kv| {

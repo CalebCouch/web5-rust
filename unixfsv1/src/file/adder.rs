@@ -1,9 +1,8 @@
-use crate::pb::{FlatUnixFs, PBLink, UnixFs, UnixFsType, DAG_PB};
+use crate::pb::{FlatUnixFs, PBLink, UnixFs, UnixFsType};
 use alloc::borrow::Cow;
 use core::fmt;
 use libipld::multihash::{Code, MultihashDigest};
 use libipld::Cid;
-use quick_protobuf::{MessageWrite, Writer};
 
 /// File tree builder. Implements [`core::default::Default`] which tracks the recent defaults.
 ///

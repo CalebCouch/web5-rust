@@ -1,52 +1,43 @@
-use super::error::Error;
-use super::{ed25519, secp256k1, secp256r1};
 use serde::{Deserialize, Serialize};
-use super::traits::PublicKey;
+use std::fmt;
 
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 pub enum Curve { Ed, K1, R1 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-pub enum GenericPublicKey {
-    Ed(ed25519::PublicKey),
-    K1(secp256k1::PublicKey),
-    R1(secp256r1::PublicKey)
-}
-
-impl GenericPublicKey {
-    pub fn as_bytes(&self) -> &[u8] {
+impl Curve {
+    pub fn to_jose_alg(&self) -> String {
+        //'P-384'     : 'ES384',
+        //'P-521'     : 'ES512',
         match self {
-            Self::Ed(key) => key.as_bytes(),
-            Self::K1(key) => key.as_bytes(),
-            Self::R1(key) => key.as_bytes(),
+            Self::Ed => "EdDSA",
+            Self::K1 => "ES256K",
+            Self::R1 => "ES256",
+        }.to_string()
+    }
+
+    pub fn supports_ecies(&self) -> bool {
+        match self {
+            Self::Ed => false,
+            Self::K1 => true,
+            Self::R1 => false
         }
     }
-    pub fn from_bytes(c: Curve, b: &[u8]) -> Result<Self, Error> where Self: Sized {
-        Ok(match c {
-            Curve::Ed => Self::Ed(PublicKey::from_bytes(b)?),
-            Curve::K1 => Self::K1(PublicKey::from_bytes(b)?),
-            Curve::R1 => Self::R1(PublicKey::from_bytes(b)?)
+
+    pub fn supports_signing(&self) -> bool {
+        match self {
+            Self::Ed => true,
+            Self::K1 => true,
+            Self::R1 => true
+        }
+    }
+}
+
+impl fmt::Display for Curve {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", match self {
+            Self::Ed => "Ed25519",
+            Self::K1 => "Secp256k1",
+            Self::R1 => "Secp256r1"
         })
     }
-    pub fn curve(&self) -> Curve {
-        match self {
-            Self::Ed(key) => key.curve(),
-            Self::K1(key) => key.curve(),
-            Self::R1(key) => key.curve(),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub enum GenericSecretKey {
-    Ed(ed25519::SecretKey),
-    K1(secp256k1::SecretKey),
-    R1(secp256r1::SecretKey)
-}
-
-#[derive(Clone)]
-pub enum GenericSignature {
-    Ed(ed25519::Signature),
-    K1(secp256k1::Signature),
-    R1(secp256r1::Signature)
 }

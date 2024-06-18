@@ -153,9 +153,6 @@ impl From<FileError> for FileReadFailed {
 /// which are a bit tricky to handle. We never turn them into Option<Cow::Owned> so we can safely
 /// use these.
 pub(crate) trait UnwrapBorrowedExt<'a> {
-    /// Does not default but requires there to be an borrowed inner value.
-    fn unwrap_borrowed(self) -> &'a [u8];
-
     /// Unwraps the Cow of [u8] into empty or wrapped slice.
     fn unwrap_borrowed_or_empty(self) -> &'a [u8]
     where
@@ -163,13 +160,6 @@ pub(crate) trait UnwrapBorrowedExt<'a> {
 }
 
 impl<'a> UnwrapBorrowedExt<'a> for Option<Cow<'a, [u8]>> {
-    fn unwrap_borrowed(self) -> &'a [u8] {
-        match self {
-            Some(Cow::Borrowed(x)) => x,
-            Some(Cow::Owned(_)) => panic!("unexpected Cow::Owned"),
-            None => panic!("Unexpected None"),
-        }
-    }
     fn unwrap_borrowed_or_empty(self) -> &'a [u8] {
         match self {
             Some(Cow::Borrowed(x)) => x,

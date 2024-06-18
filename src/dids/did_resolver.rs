@@ -17,7 +17,7 @@ impl<KVS: KeyValueStore> DidResolver<KVS> {
     }
 
 
-    pub async fn resolve<M: DidMethod + Serialize + for<'a> Deserialize<'a> + Send>(&mut self, gateway: Option<Url>, did_uri: &DidUri) -> Result<M, Error> {
+    pub async fn resolve<M: DidMethod + Serialize + for<'a> Deserialize<'a>>(&mut self, gateway: Option<Url>, did_uri: &DidUri) -> Result<M, Error> {
         let bytes = self.cache.get(&serialize(did_uri)?)?;
         Ok(match bytes {
             Some(bb) => {

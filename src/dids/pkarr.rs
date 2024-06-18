@@ -1,8 +1,7 @@
 use super::error::Error;
 
 use crate::crypto::ed25519;
-use crate::crypto::ed25519::Ed25519;
-use crate::crypto::traits::CryptoAlgorithm;
+use crate::crypto::traits::{Signer as _};
 
 
 use url::Url;
@@ -32,7 +31,7 @@ impl PkarrRelay {
         let v = v[1..v.len()-1].to_vec();
         if v.len() > 1000 { return Err(Error::InvalidDidDocumentLength(v.len().to_string())); }
 
-        let sig = Ed25519::sign(&secret_key, &v).to_vec();
+        let sig = secret_key.sign(&v);
         let body = [sig, seq.to_be_bytes().to_vec(), dns_packet].concat();
 
         let res = reqwest::Client::new().put(url)

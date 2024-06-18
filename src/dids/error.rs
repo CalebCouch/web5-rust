@@ -36,8 +36,6 @@ pub enum Error {
     PkarrResponse(String),
     #[error("The did type ({0}) is not supported by the did method ({1})")]
     UnsupportedDidType(String, String),
-    #[error("Could not parse type ({0}) from: {1}")]
-    Parse(String, String),
     #[error("Service uri had no fragment")]
     NoServiceFragment(),
     #[error("Property cannot be inserted to Custom Properties because this property exists")]
@@ -80,4 +78,12 @@ pub enum Error {
     VerificationMethodNotFound(),
     #[error("One or more verification method IDs are not unique")]
     NonUniqueId(),
+
+
+    #[error("Could not parse type ({0}) from: {1}")]
+    Parse(String, String),
+    #[error("{0} requires that {1} and it was not")]
+    Requires(String, String),
+    #[error("{0} is not supported for {1}")]
+    Unsupported(String, String),
 }

@@ -36,12 +36,20 @@ pub enum Error {
     Multihash(#[from] multihash::Error),
     #[error(transparent)]
     IpldCid(#[from] libipld::cid::Error),
+    #[error(transparent)]
+    SerdeCbor(#[from] serde_ipld_dagcbor::EncodeError<std::collections::TryReserveError>),
 
 
-    #[error("{0} and {1} are mutually inclusive arguments")]
+    #[error("if {0} is present so must {1} be, they are mutually inclusive")]
     MutuallyInclusive(String, String),
-    #[error("{0} and {1} are mutually exclusive arguments")]
+    #[error("if {0} is present then {1} must not be, they are mutually exclusive")]
     MutuallyExclusive(String, String),
-    #[error("{0} depends on the {1} argument and must be given")]
+    #[error("{0} depends on {1} and it must be present")]
     Dependant(String, String),
+    #[error("{0}")]
+    InvalidArgument(String),
+    #[error("{0} requires that {1} and it was not")]
+    Requires(String, String),
+    #[error("{0} is not supported for {1}")]
+    Unsupported(String, String),
 }

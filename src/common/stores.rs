@@ -68,13 +68,14 @@ impl KeyValueStore for LevelStore {
 }
 
 pub struct MemoryStore {
-    store: HashMap<Vec<u8>, Vec<u8>>,
-    partitions: HashMap<String, MemoryStore>
+    store: HashMap<Vec<u8>, Vec<u8>>
+    //partitions: HashMap<String, MemoryStore>
 }
 
 impl KeyValueStore for MemoryStore {
     fn default() -> Result<MemoryStore, Error> {
-        Ok(MemoryStore{store: HashMap::new(), partitions: HashMap::new()})
+        //, partitions: HashMap::new()
+        Ok(MemoryStore{store: HashMap::new()})
     }
     fn clear(&mut self) -> Result<(), Error> {
         self.store.clear();

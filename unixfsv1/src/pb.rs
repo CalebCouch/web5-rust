@@ -14,7 +14,6 @@ pub use unixfs::Data as UnixFs;
 
 /// DAG-PB multicodec code
 pub(crate) const DAG_PB: u64 = 0x70;
-pub(crate) const RAW: u64 = 0x55;
 
 /// Failure cases for nested serialization, which allows recovery of the outer `PBNode` when desired.
 #[derive(Debug)]

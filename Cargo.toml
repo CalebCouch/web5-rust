@@ -19,7 +19,7 @@ rust-crypto = "0.2.36"
 bs58 = "0.5.1"
 k256 = {version="0.13.3", features=["arithmetic", "serde"]}
 rand = "0.8.5"
-p256 = {version="0.13.2", features=["serde"]}
+p256 = {version="0.13.2", features=["arithmetic", "serde"]}
 z-base-32 = "0.1.4"
 ed25519-dalek = {version="2.1.1", features=["serde", "rand_core", "alloc"]}
 http = "1.1.0"
@@ -43,3 +43,12 @@ libipld-pb = "0.16.0"
 unixfs-v1 = {path="./unixfsv1"}
 serde_ipld_dagcbor = "0.6.1"
 chrono = "0.4.38"
+ecies = "0.2.7"
+libsecp256k1-core = "0.3.0"
+erased-serde = "0.4.5"
+typetag = "0.2.16"
+downcast-rs = "1.2.1"
+jwtk = "0.3.0"
+enum_dispatch = "0.3.13"
+cast_trait_object = "0.1.3"
+dyn-clone = "1.0.17"
