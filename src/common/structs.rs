@@ -80,6 +80,12 @@ pub struct DateTime {
 }
 
 impl DateTime {
+    pub fn from_timestamp(timestamp: u64) -> Result<DateTime, Error> {
+        Ok(DateTime::new(
+            ChronoDateTime::<Utc>::from_timestamp(timestamp as i64, 0)
+            .ok_or(Error::bad_request("DateTime::from_timestamp", "Could not create date from timestamp"))?
+        ))
+    }
     pub fn new(date: ChronoDateTime<Utc>) -> DateTime {
         DateTime{date}
     }
@@ -88,6 +94,9 @@ impl DateTime {
     }
     pub fn timestamp(&self) -> u64 {
         Some(self.date.timestamp()).filter(|t| *t >= 0).expect("timestamp was negative") as u64
+    }
+    pub fn format(&self, fmt: &str) -> String {
+        self.date.format(fmt).to_string()
     }
 }
 
