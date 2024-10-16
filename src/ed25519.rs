@@ -36,7 +36,7 @@ impl std::fmt::Display for PublicKey {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct SecretKey {
     key: SigningKey
 }

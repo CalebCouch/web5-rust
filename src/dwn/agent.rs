@@ -1,230 +1,294 @@
 use super::Error;
-use crate::common::traits::KeyValueStore;
-use crate::common::structs::DateTime;
-use crate::common::Database;
-use crate::crypto::secp256k1::SecretKey;
-use crate::crypto::structs::Hash;
-use crate::crypto::traits::Hashable;
+use simple_crypto::{PublicKey, Hashable, Hash};
+use super::structs::{PermissionedRecord, ProtocolFetcher};
+use simple_database::database::{SortOptions, Filter, FiltersBuilder,Filters, Index};
+use super::permission::PermissionSet;
+use crate::common::DateTime;
+
+use super::json_rpc::JsonRpc;
 use crate::dids::structs::{
-    DidResolver as DefaultDidResolver,
-    DidKeyPair,
+    DefaultDidResolver,
     Did,
 };
 use crate::dids::traits::DidResolver;
-use super::structs::{PermissionedRecord, Record};
-use super::permission::Permission;
-use super::traits::{Client, P2P};
+use crate::dids::signing::Verifier;
+use super::structs::{AgentKey, Record};
+use super::permission::PermissionOptions;
 use super::protocol::Protocol;
-use super::DwnClient;
-use std::path::PathBuf;
+use super::traits::Router;
+use super::{PrivateClient, PublicClient, DMClient};
 
-#[derive(Clone, Debug)]
-pub struct PPG {key: SecretKey}
-impl P2P for PPG {
-    fn p_to_p(&self, protocol: &Hash) -> Result<Permission, Error> {
-        Permission::from_key(&self.key.derive_hash(protocol)?)
-    }
-}
+use std::collections::BTreeMap;
+
+use either::Either;
 
 pub struct Agent {
-    pub keypair: DidKeyPair,
-    pub database: Database,
-    pub metadata: Box<dyn KeyValueStore>,
-    pub did_resolver: Box<dyn DidResolver>,
-    pub client: Box<dyn Client>
+    agent_key: AgentKey,
+    private_client: PrivateClient,
+    public_client: PublicClient,
+    dm_client: DMClient,
 }
 
 impl Agent {
-    pub async fn new<KVS: KeyValueStore + 'static>(
-        keypair: DidKeyPair,
-        data_path: Option<PathBuf>,
+    pub fn new(
+        agent_key: AgentKey,
+        protocols: BTreeMap<Hash, Protocol>,
+        router: Option<Box<dyn Router>>,
         did_resolver: Option<Box<dyn DidResolver>>,
-        client: Option<Box<dyn Client>>,
-    ) -> Result<Self, Error> {
-        let data_path = data_path.unwrap_or(PathBuf::from("AGENT"));
+    ) -> Self {
         let did_resolver = did_resolver.unwrap_or(Box::new(DefaultDidResolver::new()));
-        let client = client.unwrap_or(Box::new(DwnClient::new::<KVS>(
-            keypair.public.did.clone(),
-            None, None, did_resolver.clone(),
-            Box::new(PPG{key: keypair.secret.clone()})
-        )?));
-        Ok(Agent{
-            keypair,
-            database: Database::new::<KVS>(data_path.join("DATABASE"))?,
-            metadata: Box::new(KVS::new(data_path.join("METADATA"))?),
-            did_resolver,
-            client,
-        })
+        let router = router.unwrap_or(Box::new(JsonRpc::new(Some(did_resolver.clone()))));
+        let protocol_fetcher = ProtocolFetcher::new(protocols);
+        let private_client = PrivateClient::new(router.clone(), protocol_fetcher.clone());
+        let public_client = PublicClient::new(Either::Left(agent_key.sig_key.clone()), router.clone(), did_resolver.clone(), protocol_fetcher.clone());
+        let dm_client = DMClient::new(agent_key.sig_key.clone(), agent_key.com_key.key.clone(), router.clone(), did_resolver.clone());
+
+        Agent{
+            agent_key,
+            private_client,
+            public_client,
+            dm_client,
+        }
     }
 
-    pub fn tenant(&self) -> Did {self.keypair.public.did.clone()}
-
-    pub fn record_key(&self, record_id: &Hash) -> Result<SecretKey, Error> {
-        self.keypair.secret.derive_hash(record_id)
-    }
-
-    pub fn get_permission(&self, record_id: &Hash) -> Result<Permission, Error> {
-        Permission::from_key(&self.record_key(record_id)?)
-    }
-
-    pub async fn configure_protocol(&mut self, protocol: Protocol) -> Result<(), Error> {
-        self.client.configure_protocol(protocol).await
-    }
+    pub fn tenant(&self) -> Did {self.agent_key.sig_key.public.did.clone()}
 
     pub async fn create(
-        &mut self,
-        parent_id: Option<&Hash>,
+        &self,
+        parent_path: &[Hash],
+        permission_options: Option<&PermissionOptions>,
         record: Record,
         dids: &[&Did],
-    ) -> Result<Permission, Error> {
-        let perms = self.get_permission(&record.record_id)?;
-        let child_perms = self.client.create(&perms, record, dids).await?;
-        Ok(if let Some(parent_id) = parent_id {
-            let parent = self.read(parent_id, dids).await?.ok_or(Error::not_found("Agent.create", "Could not find Parent"))?;
-            self.client.create_child(&parent.0, parent.1.get_latest_delete(), child_perms, dids).await?.0
-        } else {child_perms})
-    }
-
-    pub async fn create_if_not_exists(
-        &mut self,
-        record: Record,
-        dids: &[&Did]
-    ) -> Result<PermissionedRecord, Error> {
-        Ok(if let Some(perm_record) = self.read(&record.record_id, dids).await? {
-            if perm_record.1 != record {return Err(Error::bad_request(
-                "Agent.create_if_not_exists", "Existing record does not match"
-            ));}
-            perm_record
-        } else {
-            (self.create(None, record.clone(), dids).await?, record)
-        })
+    ) -> Result<Vec<Hash>, Error> {
+        let error = |r: &str| Error::bad_request("Agent.create", r);
+        let record_path = [parent_path.to_vec(), vec![record.record_id]].concat();
+        let record_perms = self.get_permission(&record_path)?;
+        let perm_parent = self.private_client.read(&self.get_permission(parent_path)?, dids).await?.ok_or(error("Parent could not be found"))?;
+        let perms = self.private_client.create(record_perms, permission_options, record, dids).await?;
+        let record = Record::new(None, Protocol::perm_pointer().hash(), serde_json::to_vec(&perms)?);
+        self.private_client.create_child(&perm_parent, record, dids).await?;
+        Ok(record_path)
     }
 
     pub async fn read(
-        &mut self,
-        record_id: &Hash,
+        &self,
+        path: &[Hash],
+        index: Option<(usize, Option<usize>)>,
         dids: &[&Did]
-    ) -> Result<Option<PermissionedRecord>, Error> {
-        let perms = self.get_permission(record_id)?;
-        if let Some(perm_record) = self.client.read(&perms, dids, true).await? {
-            if perm_record.1.record_id != *record_id {return Err(Error::bad_request(
-                "Agent.read", "record_id returned a record with a different Record Id"
-            ));}
-            Ok(Some(perm_record))
-        } else {Ok(None)}
+    ) -> Result<Option<Record>, Error> {
+        let perms = self.get_permission(path)?;
+        if let Some(record) = self.private_client.read(&perms, dids).await? {
+            if let Some((start, end)) = index {
+                Ok(self.private_client.read_child(&record, Some(start), end, dids).await?.0.first().map(|pr| pr.0.1.clone()))
+            } else {
+                Ok(Some(record.1))
+            }
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn update(
-        &mut self,
+        &self,
+        path: &[Hash],
+        permission_options: Option<&PermissionOptions>,
         record: Record,
         dids: &[&Did],
-    ) -> Result<Permission, Error> {
-        let perms = self.get_permission(&record.record_id)?;
-        let perms = self.read(&record.record_id, dids).await?.map(|r| r.0).unwrap_or(perms);
-        self.client.update(&perms, record, dids).await
+    ) -> Result<(), Error> {
+        let perms = self.get_permission(path)?;
+        self.private_client.update(perms, permission_options, record, dids).await?;
+        Ok(())
     }
 
     pub async fn delete(
-        &mut self,
-        record_id: &Hash,
+        &self,
+        path: &[Hash],
         dids: &[&Did],
+    ) -> Result<bool, Error> {
+        if let Some(record) = self.private_client.read(&self.get_permission(path)?, dids).await? {
+            self.private_client.delete(&record.0, dids).await?;
+            Ok(true)
+        } else {Ok(false)}
+    }
+
+    pub async fn share(
+        &self,
+        path: &[Hash],
+        permission_options: &PermissionOptions,
+        recipient: &Did
     ) -> Result<(), Error> {
-        let (perms, _) = self.read(record_id, dids).await?.ok_or(Error::not_found("Agent.update", "Could not find Record"))?;
-        self.client.delete(&perms, dids).await
-    }
+        let channel = self.establish_direct_messages(recipient).await?;
 
-    pub async fn read_child(
-        &mut self,
-        parent_id: &Hash,
-        index: usize,
-        dids: &[&Did]
-    ) -> Result<Option<PermissionedRecord>, Error> {
-        Ok(self.read_children(parent_id, index, Some(index+1), dids).await?.first().cloned())
-    }
+        let filters = FiltersBuilder::build(vec![
+            ("author", Filter::equal(recipient.to_string())),
+            ("type", Filter::equal("agent_keys".to_string()))
+        ]);
 
-    pub async fn read_children(
-        &mut self,
-        parent_id: &Hash,
-        start: usize,
-        end: Option<usize>,
-        dids: &[&Did],
-    ) -> Result<Vec<PermissionedRecord>, Error> {
-        let (perms, _) = self.read(parent_id, dids).await?.ok_or(Error::not_found("Agent.read_children", "Parent could not be found"))?;
-        self.client.read_child(&perms, start, end, dids).await
-    }
+        let perms = serde_json::to_vec(&self.get_permission(path)?.subset(permission_options)?)?;
 
-    pub async fn delete_child(
-        &mut self,
-        parent_id: &Hash,
-        index: usize,
-        dids: &[&Did]
-    ) -> Result<(), Error> {
-        let (perms, _) = self.read(parent_id, dids).await?.ok_or(Error::not_found("Agent.read_children", "Parent could not be found"))?;
-        self.client.delete_child(&perms, index, dids).await
-    }
-
-
-    pub async fn send_dm(&mut self, recipient: &Did, permission: Permission) -> Result<(), Error> {
-        let pr = self.establish_dms(recipient).await?;
-        self.client.create_child(&pr.0, pr.1.get_latest_delete(), permission, &[recipient, &self.tenant()]).await?;
+        let agent_keys = self.public_read(filters, None, &[recipient]).await?.first().and_then(|(_, record)|
+            serde_json::from_slice::<Vec<PublicKey>>(&record.payload).ok()
+        ).ok_or(Error::bad_request("Agent.share", "Recipient has no agents"))?
+        .into_iter().map(|key| Ok(key.encrypt(&perms)?)).collect::<Result<Vec<Vec<u8>>, Error>>()?;
+        let record = Record::new(None, Protocol::shared_pointer().hash(), serde_json::to_vec(&agent_keys)?);
+        self.private_client.create_child(
+            &channel,
+            record,
+            &[&self.tenant(), recipient]
+        ).await?;
         Ok(())
     }
 
-    pub async fn read_dms(&mut self, recipient: &Did, start: usize, end: Option<usize>) -> Result<Vec<PermissionedRecord>, Error> {
-        let pr = self.establish_dms(recipient).await?;
-        self.client.read_child(&pr.0, start, end, &[recipient, &self.tenant()]).await
-    }
-
-    pub async fn establish_dms(&mut self, recipient: &Did) -> Result<PermissionedRecord, Error> {
+    pub async fn scan(&self) -> Result<(), Error> {
+        let dids = [&self.tenant()];
         self.check_did_messages().await?;
-        let payload = serde_json::to_vec(recipient)?;
-        let record_id = payload.hash();
-        let perm = self.get_permission(&record_id)?;
-        Ok(if let Some(perm_record) = self.client.read(&perm, &[recipient, &self.tenant()], true).await? {
-            perm_record
-        } else {
-            let record = Record::new(Some(record_id), Protocol::dms_channel().hash(), payload);
-            let perms = self.create(None, record, &[recipient, &self.tenant()]).await?;
-            self.client.create_did_msg(&self.keypair, recipient, perms).await?;
-            self.read(&record_id, &[&self.tenant()]).await?.ok_or(Error::err(
-                "Agent.establish_dms", "Failed to create dm channel"
-            ))?
-        })
-    }
+        let root = self.private_client.read(&PermissionSet::from_key(&self.agent_key.com_key)?, &dids).await?
+                .ok_or(Error::bad_request("Agent.establish_direct_messages", "Parent Not Found"))?;
+        let channels = self.private_client.read_child(&root, None, None, &dids).await?.0;
 
-    pub async fn check_did_messages(&mut self) -> Result<(), Error> {
-        let ldc_id = serde_json::to_vec("LAST_DM_CHECK")?.hash();
-        let last_dm_check = self.read(&ldc_id, &[&self.tenant()]).await?.map(|record|
-            serde_json::from_slice::<DateTime>(&record.1.payload)
-        ).transpose()?.unwrap_or_default();
-        //TODO: if last dm check was in the last 5-10 minutes return ok
+        for (channel, index) in channels {
+            let ldi_id = serde_json::to_vec(&format!("LAST_DM_INDEX: {} {}", serde_json::to_vec(&self.agent_key.com_key.path)?.hash(), index))?.hash();
+            let ldi_perms = PermissionSet::from_key(&self.agent_key.com_key.from_path(&[ldi_id])?)?;
+            let last_dm_index = self.private_client.read(&ldi_perms, &dids).await?.map(|record|
+                serde_json::from_slice::<usize>(&record.1.payload)
+            ).transpose()?;
+            let (records, last_dm_index) = self.private_client.read_child(&channel, last_dm_index, None, &dids).await?;
 
-        for (sender, permission) in self.client.read_did_msgs((&self.tenant(), &self.keypair.secret), last_dm_check).await? {
-            if let Some(pr) = self.client.read(&permission, &[&sender, &self.tenant()], false).await? {
-                if pr.1.protocol == Protocol::dms_channel().hash() {
-                    let record = Record::new(Some(serde_json::to_vec(&sender)?.hash()), Protocol::permission_grant().hash(), serde_json::to_vec(&pr.0)?);
-                    self.update(record, &[&self.tenant()]).await?;
+            for (channel_item, _) in records {
+                let agent_payloads = serde_json::from_slice::<Vec<Vec<u8>>>(&channel_item.1.payload)?;
+                if let Some(sent_perms) = agent_payloads.into_iter().find_map(|p|
+                    self.agent_key.enc_key.key.decrypt(&p).ok().and_then(|p|
+                        serde_json::from_slice::<PermissionSet>(&p).ok()
+                    )
+                ) {
+                    if self.private_client.read(&sent_perms, &dids).await?.is_some() {
+                        if let Ok(my_perms) = self.get_permission(&sent_perms.path) {
+                            if let (Some(record), _) = self.private_client.internal_read(&my_perms, None, &dids).await? {
+                                if record.1.protocol == Protocol::pointer().hash() {
+                                    let perms = serde_json::from_slice::<PermissionSet>(&record.1.payload)?;
+                                    if let Ok(perms) = perms.combine(sent_perms) {
+                                        let mut record = record.1;
+                                        record.payload = serde_json::to_vec(&perms)?;
+                                        self.private_client.update(my_perms, None, record, &dids).await?;
+                                    }
+                                }
+                            } else {
+                                let parent_path = &sent_perms.path[..sent_perms.path.len()-1];
+                                if let Ok(my_parent_perms) = self.get_permission(parent_path) {
+                                    if let Ok(Some(perm_parent)) = self.private_client.read(&my_parent_perms, &dids).await {
+                                        let record = Record::new(None, Protocol::pointer().hash(), serde_json::to_vec(&sent_perms)?);
+                                        let perms = self.private_client.create(my_perms, None, record, &dids).await?;
+                                        let record = Record::new(None, Protocol::perm_pointer().hash(), serde_json::to_vec(&perms)?);
+                                        self.private_client.create_child(&perm_parent, record, &dids).await?;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
+
+            let record = Record::new(Some(ldi_id), Protocol::usize().hash(), serde_json::to_vec(&last_dm_index)?);
+            self.private_client.update(ldi_perms, None, record, &dids).await?;
         }
-        let record = Record::new(Some(ldc_id), Protocol::file().hash(), serde_json::to_vec(&DateTime::now())?);
-        self.update(record, &[&self.tenant()]).await?;
         Ok(())
+    }
+
+    pub async fn public_create(
+        &self,
+        record: Record,
+        index: Index,
+        dids: &[&Did]
+    ) -> Result<(), Error> {
+        self.public_client.create(record, index, dids).await
+    }
+
+    pub async fn public_read(
+        &self,
+        filters: Filters,
+        sort_options: Option<SortOptions>,
+        dids: &[&Did]
+    ) -> Result<Vec<(Verifier, Record)>, Error> {
+        self.public_client.read(filters, sort_options, dids).await
+    }
+
+    pub async fn public_update(
+        &self,
+        record: Record,
+        index: Index,
+        dids: &[&Did]
+    ) -> Result<(), Error> {
+        self.public_client.update(record, index, dids).await
+    }
+
+    pub async fn public_delete(
+        &self,
+        record_id: Hash,
+        dids: &[&Did]
+    ) -> Result<(), Error> {
+        self.public_client.delete(record_id, dids).await
+    }
+
+    async fn establish_direct_messages(&self, recipient: &Did) -> Result<PermissionedRecord, Error> {
+        self.check_did_messages().await?;
+        let dids = [recipient, &self.tenant()];
+        let perms = PermissionSet::from_key(&self.agent_key.com_key.from_path(&[recipient.hash()])?)?;
+        if let Some(perm_record) = self.private_client.read(&perms, &dids).await? {
+            Ok(perm_record)
+        } else {
+            let protocol = Protocol::dms_channel();
+            let record = Record::new(Some(recipient.hash()), protocol.hash(), Vec::new());
+
+            let perm_parent = self.private_client.read(&PermissionSet::from_key(&self.agent_key.com_key)?, &dids).await?
+                .ok_or(Error::bad_request("Agent.establish_direct_messages", "Parent Not Found"))?;
+            let perms = self.private_client.create(perms.clone(), None, record, &dids).await?;
+            let record = Record::new(None, Protocol::perm_pointer().hash(), serde_json::to_vec(&perms)?);
+            self.private_client.create_child(&perm_parent, record, &[&self.tenant()]).await?;
+
+            self.dm_client.create(recipient, perms.clone()).await?;
+            Ok(self.private_client.read(&perms, &dids).await?.ok_or(
+                Error::bad_request("Agent.establish_direct_messages", "Could not create record")
+            )?)
+        }
+    }
+
+    async fn check_did_messages(&self) -> Result<(), Error> {
+        let dids = [&self.tenant()];
+        let ldc_id = serde_json::to_vec("LAST_DM_CHECK")?.hash();
+        let ldc_perms = PermissionSet::from_key(&self.agent_key.com_key.from_path(&[ldc_id])?)?;
+        let last_dm_check = self.private_client.read(&ldc_perms, &dids).await?.map(|record|
+            serde_json::from_slice::<DateTime>(&record.1.payload)
+        ).transpose()?.unwrap_or_default();
+
+        for (sender, permission) in self.dm_client.read(last_dm_check).await? {
+            if let Some(pr) = self.private_client.read(&permission, &dids).await? {
+                let record = Record::new(Some(sender.hash()), Protocol::pointer().hash(), serde_json::to_vec(&pr.0)?);
+                let channel_perms = PermissionSet::from_key(&self.agent_key.com_key.from_path(&[sender.hash()])?)?;
+
+                let perm_parent = self.private_client.read(&PermissionSet::from_key(&self.agent_key.com_key)?, &dids).await?
+                    .ok_or(Error::bad_request("Agent.check_did_messages", "Parent Not Found"))?;
+
+                let perms = self.private_client.update(channel_perms, None, record, &dids).await?;
+                //let perms = self.private_client.create(perms.clone(), None, record, &dids).await?;
+
+                let record = Record::new(None, Protocol::perm_pointer().hash(), serde_json::to_vec(&perms)?);
+                self.private_client.create_child(&perm_parent, record, &dids).await?;
+            }
+        }
+        let record = Record::new(Some(ldc_id), Protocol::date_time().hash(), serde_json::to_vec(&DateTime::now())?);
+        self.private_client.update(ldc_perms, None, record, &dids).await?;
+        Ok(())
+    }
+
+    fn get_permission(&self, path: &[Hash]) -> Result<PermissionSet, Error> {
+        PermissionSet::from_key(&self.agent_key.enc_key.from_path(path)?)
     }
 }
 
 impl std::fmt::Debug for Agent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Agent")
-        .field("tenant", &self.keypair.public.did.to_string())
-//      .field("Records",
-//          &self.database.query::<SignedObject<Record>>(None, &Filters::default(), None).unwrap().0.iter().map(|r| {
-//              (
-//                  format!("record_id: {}", r.inner().record_id().to_string()),
-//                  r.secondary_keys()
-//              )
-//          }).collect::<Vec<(String, Index)>>()
-//      )
+        //.field("tenant", &self.tenant().to_string())
         .finish()
     }
 }

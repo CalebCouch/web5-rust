@@ -1,14 +1,14 @@
 use super::Error;
 
-use crate::common::structs::Url;
-
-use crate::crypto::ed25519::{SecretKey};
+use crate::ed25519::{SecretKey};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_bencode::value::Value;
+
+use url::Url;
 
 const PKARR_SIZE_LIMIT: usize = 1000;
 
@@ -34,7 +34,7 @@ impl PkarrRelay {
         let sig = secret_key.sign(&v).to_vec();
         let body = [sig, seq.to_be_bytes().to_vec(), dns_packet].concat();
 
-        let res = reqwest::Client::new().put(url.get())
+        let res = reqwest::Client::new().put(url)
             .header("Content-Type", "application/octet-stream")
             .body(body)
             .send().await?;
@@ -47,7 +47,7 @@ impl PkarrRelay {
     }
 
     pub async fn get(url: Url) -> Result<Option<Vec<u8>>, Error> {
-        let res = reqwest::get(url.get()).await?;
+        let res = reqwest::get(url).await?;
         if !res.status().is_success() {
             if res.status() == reqwest::StatusCode::NOT_FOUND {return Ok(None);}
             Err(Error::err("PkarrRelay.get", &res.text().await?))

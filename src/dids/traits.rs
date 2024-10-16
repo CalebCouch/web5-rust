@@ -7,11 +7,11 @@ use super::structs::{
     DidKey,
     Did
 };
-use crate::common::structs::Url;
-use crate::crypto::secp256k1::PublicKey;
+use simple_crypto::PublicKey;
 use dyn_clone::{clone_trait_object, DynClone};
 use std::collections::BTreeSet;
 use std::str::FromStr;
+use url::Url;
 
 #[typetag::serde(tag = "type")]
 #[async_trait::async_trait]
@@ -43,12 +43,12 @@ pub trait DidResolver: DynClone + std::fmt::Debug + Sync + Send {
             doc.get_key(&kid.id()).cloned()
         ))
     }
-    async fn resolve_dwn_key(&self, did: &Did) -> Result<PublicKey, Error> {
+    async fn resolve_dwn_keys(&self, did: &Did) -> Result<(PublicKey, PublicKey), Error> {
         let error = |r: &str| Error::not_found("DidResolver.resolve_dwn_key", r);
         let doc = self.resolve(did).await?.ok_or(error("Could not resolve Did"))?;
-        let svc = doc.get_service("dwn").ok_or(error("Could not locate DWN service"))?;
-        let id = svc.keys.first().ok_or(error("Could not get service key"))?;
-        Ok(doc.get_key(id).cloned().ok_or(error("Could not get key by ID"))?.public_key)
+        let sig = doc.get_key("sig").cloned().ok_or(error("Could not get key by ID"))?.public_key;
+        let com = doc.get_key("com").cloned().ok_or(error("Could not get key by ID"))?.public_key;
+        Ok((sig, com))
     }
 
     async fn get_endpoints(&self, dids: &[&Did]) -> Result<Vec<Endpoint>, Error> {

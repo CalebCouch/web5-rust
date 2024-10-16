@@ -44,6 +44,10 @@ pub enum Error {
     BitcoinBip32(#[from] bitcoin::bip32::Error),
     #[error(transparent)]
     HashFromSlice(#[from] bitcoin_hashes::FromSliceError),
+    #[error(transparent)]
+    SimpleDatabase(#[from] simple_database::Error),
+    #[error(transparent)]
+    SimpleCrypto(#[from] simple_crypto::Error),
 
     #[error("{0}")]
     JsonValidation(String),
@@ -73,6 +77,9 @@ pub enum Error {
     Conflict(String, String), //409
     #[error("Error {0}: {1}")]
     Error(String, String), //500
+
+    #[error("InsufficentPermission")]
+    InsufficentPermission()
 }
 
 impl Error {

@@ -1,16 +1,17 @@
 use super::Error;
-use super::traits::DidDocument;
+use super::traits::{DidResolver, DidDocument};
 use super::DhtDocument;
-use crate::common::traits::{Indexable};
-use crate::common::structs::{Schemas, Url};
-use crate::crypto::secp256k1::{SecretKey, PublicKey};
-use crate::crypto::traits::{Hashable};
+use crate::common::Schemas;
+use crate::ed25519::SecretKey as EdSecretKey;
+use simple_crypto::{SecretKey, PublicKey, Hashable};
 use std::collections::BTreeMap;
 use schemars::schema::Schema;
 use serde::{Deserialize, Serialize};
 use schemars::gen::SchemaGenerator;
+use simple_database::Indexable;
 use schemars::JsonSchema;
 use regex::Regex;
+use url::Url;
 
 pub type Endpoint = (Did, Url);
 
@@ -240,10 +241,10 @@ impl DidService {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum DidKeyPurpose {Auth, Asm, Agm, Inv, Del}
 
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct DidKey {
     pub id: String,
     pub did: Did,
@@ -269,7 +270,7 @@ impl DidKey {
     pub fn key_uri(&self) -> DidKeyUri {DidKeyUri::new(self.did.clone(), &self.id)}
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct DidKeyPair {
     pub secret: SecretKey,
     pub public: DidKey
@@ -285,19 +286,36 @@ impl DidKeyPair {
     }
 }
 
-
-
 #[derive(Debug, Clone)]
-pub struct DidResolver {}
+pub struct DefaultDidResolver {}
 
 #[async_trait::async_trait]
-impl super::traits::DidResolver for DidResolver {
-    fn new() -> Self {DidResolver{}}
+impl DidResolver for DefaultDidResolver {
+    fn new() -> Self {DefaultDidResolver{}}
     async fn resolve(&self, did: &Did) -> Result<Option<Box<dyn DidDocument>>, Error> {
         Ok(match did.method {
             DidMethod::DHT => DhtDocument::resolve(&did.id).await?.map(|m|
                 Box::new(m) as Box<dyn DidDocument>
             )
         })
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Identity {
+    pub did_key: EdSecretKey,
+    pub sig_key: DidKeyPair,
+    pub enc_key: SecretKey,
+    pub com_key: SecretKey,
+}
+
+impl Identity {
+    pub fn new(
+        did_key: EdSecretKey,
+        sig_key: DidKeyPair,
+        enc_key: SecretKey,
+        com_key: SecretKey,
+    ) -> Self {
+        Identity{did_key, sig_key, enc_key, com_key}
     }
 }

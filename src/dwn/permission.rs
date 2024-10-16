@@ -1,8 +1,8 @@
 use super::Error;
 
-use crate::common::structs::Either;
+use simple_crypto::{SecretKey, Hash, Key};
 
-use crate::crypto::secp256k1::{SecretKey, PublicKey, Key};
+use super::structs::DwnKey;
 
 use schemars::JsonSchema;
 use serde::{Serialize, Deserialize};
@@ -16,7 +16,7 @@ pub struct PermissionOptions {
 }
 
 impl PermissionOptions {
-    pub fn new(
+    pub const fn new(
         can_create: bool, can_read: bool, can_delete: bool,
         channel: Option<ChannelPermissionOptions>
     ) -> Self {
@@ -32,101 +32,98 @@ pub struct ChannelPermissionOptions {
 }
 
 impl ChannelPermissionOptions {
-    pub fn new(can_discover: bool, can_create: bool, can_read: bool) -> Self {
+    pub const fn new(can_discover: bool, can_create: bool, can_read: bool) -> Self {
         ChannelPermissionOptions{can_discover, can_create, can_read}
     }
 }
 
 #[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ChannelPermission {
+pub struct ChannelPermissionSet {
     pub discover: Key,
     pub create: Key,
     pub read: Key,
-    pub delete: PublicKey,//Key provided so that records that require a delete key that are created under a channel can use a known key(Combine discover key for child with this key and XOR some constant to prevent anyone from using this key ever)
 }
 
-impl ChannelPermission {
+impl ChannelPermissionSet {
     pub fn validate(&self, other: &Self) -> Result<(), Error> {
         let error = |r: &str| Error::bad_request("ChannelPermission.validate", r);
-        if self.discover.map_ref_to_left(|k| k.public_key()) !=
-            other.discover.map_ref_to_left(|k| k.public_key())  {
+        if self.discover.public_key() != other.discover.public_key()  {
             return Err(error("DiscoverChild key does not match"));
         }
-        if self.create.map_ref_to_left(|k| k.public_key()) !=
-            other.create.map_ref_to_left(|k| k.public_key()) {
+        if self.create.public_key() != other.create.public_key() {
             return Err(error("CreateChild key does not match"));
         }
-        if self.read.map_ref_to_left(|k| k.public_key()) !=
-            other.read.map_ref_to_left(|k| k.public_key()) {
+        if self.read.public_key() != other.read.public_key() {
             return Err(error("ReadChild key dose not match"));
-        }
-        if self.delete != other.delete {
-            return Err(error("DeleteChild key dose not match"));
         }
         Ok(())
     }
 }
 
 #[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Permission {
+pub struct PermissionSet {
+    pub path: Vec<Hash>,
     pub discover: SecretKey,
     pub create: Key,
     pub read: Key,
     pub delete: Option<Key>,
-    pub channel: Option<ChannelPermission>
+    pub channel: Option<ChannelPermissionSet>
 }
 
-impl Permission {
+impl PermissionSet {
     pub fn new(
+        path: Vec<Hash>,
         discover: SecretKey,
         create: Key,
         read: Key,
         delete: Option<Key>,
-        channel: Option<ChannelPermission>
-    ) -> Permission {
-        Permission{discover, create, read, delete, channel}
+        channel: Option<ChannelPermissionSet>
+    ) -> Self {
+        PermissionSet{path, discover, create, read, delete, channel}
     }
 
-    pub fn from_key(key: &SecretKey) -> Result<Permission, Error> {
-        Ok(Permission{
+    pub fn from_key(key: &DwnKey) -> Result<PermissionSet, Error> {
+        let path = key.path.clone();
+        let key = &key.key;
+        Ok(PermissionSet{
+            path,
             discover: key.derive_usize(0)?,
-            create: Either::Right(key.derive_usize(1)?),
-            read: Either::Right(key.derive_usize(2)?),
-            delete: Some(Either::Right(key.derive_usize(3)?)),
-            channel: Some(ChannelPermission{
-                discover: Either::Right(key.derive_usize(4)?),
-                create: Either::Right(key.derive_usize(5)?),
-                read: Either::Right(key.derive_usize(6)?),
-                delete: key.derive_usize(7)?.public_key(),
+            create: Key::new_secret(key.derive_usize(1)?),
+            read: Key::new_secret(key.derive_usize(2)?),
+            delete: Some(Key::new_secret(key.derive_usize(3)?)),
+            channel: Some(ChannelPermissionSet{
+                discover: Key::new_secret(key.derive_usize(4)?),
+                create: Key::new_secret(key.derive_usize(5)?),
+                read: Key::new_secret(key.derive_usize(6)?),
             })
         })
     }
 
     pub fn subset(self, options: &PermissionOptions) -> Result<Self, Error> {
         let error = |r: &str| Err(Error::bad_request("Permission.subset", r));
-        if options.can_create && self.create.is_left() {return error("Missing create permission");}
-        if options.can_read && self.read.is_left() {return error("Missing read permission");}
-        if options.can_delete && self.delete.as_ref().map(|d| d.is_left()).unwrap_or(true) {return error("Missing delete permission");}
+        if options.can_create && self.create.is_public() {return error("Missing create permission");}
+        if options.can_read && self.read.is_public() {return error("Missing read permission");}
+        if options.can_delete && self.delete.as_ref().map(|d| d.is_public()).unwrap_or(true) {return error("Missing delete permission");}
         if options.channel.is_some() && self.channel.is_none() {return error("Missing channel permission");}
         if let Some(options_channel) = &options.channel {
             if let Some(channel) = &self.channel {
-                if options_channel.can_discover && channel.discover.is_left() {return error("Missing discover child permission");}
-                if options_channel.can_create && channel.create.is_left() {return error("Missing create child permission");}
-                if options_channel.can_read && channel.read.is_left() {return error("Missing read child permission");}
+                if options_channel.can_discover && channel.discover.is_public() {return error("Missing discover child permission");}
+                if options_channel.can_create && channel.create.is_public() {return error("Missing create child permission");}
+                if options_channel.can_read && channel.read.is_public() {return error("Missing read child permission");}
             }
         }
-        Ok(Permission{
+        Ok(PermissionSet{
+            path: self.path,
             discover: self.discover,
-            create: if options.can_create {self.create} else {Either::Left(self.create.map_to_left(|k| k.public_key()))},
-            read: if options.can_read {self.read} else {Either::Left(self.read.map_to_left(|k| k.public_key()))},
-            delete: if options.can_delete {self.delete} else {self.delete.map(|d| Either::Left(d.map_to_left(|k| k.public_key())))},
+            create: if options.can_create {self.create} else {self.create.to_public()},
+            read: if options.can_read {self.read} else {self.read.to_public()},
+            delete: if options.can_delete {self.delete} else {self.delete.map(|d| d.to_public())},
             channel: options.channel.as_ref().map(|c| {
                 let channel = self.channel.unwrap();
-                ChannelPermission{
-                    discover: if c.can_discover {channel.discover} else {Either::Left(channel.discover.map_to_left(|k| k.public_key()))},
-                    create: if c.can_create {channel.create} else {Either::Left(channel.create.map_to_left(|k| k.public_key()))},
-                    read: if c.can_read {channel.read} else {Either::Left(channel.read.map_to_left(|k| k.public_key()))},
-                    delete: channel.delete
+                ChannelPermissionSet{
+                    discover: if c.can_discover {channel.discover} else {channel.discover.to_public()},
+                    create: if c.can_create {channel.create} else {channel.create.to_public()},
+                    read: if c.can_read {channel.read} else {channel.read.to_public()},
                 }
             })
         })
@@ -139,18 +136,18 @@ impl Permission {
         if self.channel.is_none() {other.channel = None;}
         else if other.channel.is_none() {self.channel = None;}
         self.validate(&other)?;
-        Ok(Permission{
+        Ok(PermissionSet{
+            path: self.path,
             discover: self.discover,
-            create: self.create.right_or(other.create),
-            read: self.read.right_or(other.read),
-            delete: self.delete.map(|d| d.right_or(other.delete.unwrap())),
+            create: self.create.secret_or(other.create),
+            read: self.read.secret_or(other.read),
+            delete: self.delete.map(|d| d.secret_or(other.delete.unwrap())),
             channel: self.channel.map(|channel| {
                 let other_channel = other.channel.unwrap();
-                ChannelPermission{
-                    discover: channel.discover.right_or(other_channel.discover),
-                    create: channel.create.right_or(other_channel.create),
-                    read: channel.read.right_or(other_channel.read),
-                    delete: channel.delete,
+                ChannelPermissionSet{
+                    discover: channel.discover.secret_or(other_channel.discover),
+                    create: channel.create.secret_or(other_channel.create),
+                    read: channel.read.secret_or(other_channel.read),
                 }
             })
         })
@@ -158,19 +155,20 @@ impl Permission {
 
     pub fn validate(&self, other: &Self) -> Result<(), Error> {
         let error = |r: &str| Error::bad_request("Permission.validate", r);
+        if self.path != other.path {
+            return Err(error("Record paths do not match"));
+        }
         if self.discover != other.discover {
             return Err(error("Discover key dose not match"));
         }
-        if self.create.map_ref_to_left(|k| k.public_key()) !=
-            other.create.map_ref_to_left(|k| k.public_key()) {
+        if self.create.public_key() != other.create.public_key() {
             return Err(error("Create key dose not match"));
         }
-        if self.read.map_ref_to_left(|k| k.public_key()) !=
-            other.read.map_ref_to_left(|k| k.public_key()) {
+        if self.read.public_key() != other.read.public_key() {
             return Err(error("Read key does not match"));
         }
-        if self.delete.as_ref().map(|d| d.map_ref_to_left(|r| r.public_key())) !=
-            other.delete.as_ref().map(|d| d.map_ref_to_left(|r| r.public_key())) {
+        if self.delete.as_ref().map(|d| d.public_key()) !=
+            other.delete.as_ref().map(|d| d.public_key()) {
             return Err(error("Delete key dose not match"));
         }
         if let Some(c1) = &self.channel {

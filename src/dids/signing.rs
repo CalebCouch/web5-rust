@@ -1,11 +1,6 @@
 use super::Error;
 
-use crate::common::traits::Indexable;
-use crate::common::database::Index;
-use crate::common::structs::Either;
-
-use crate::crypto::secp256k1::{SecretKey, PublicKey};
-use crate::crypto::traits::{Hashable};
+use simple_crypto::{SecretKey, PublicKey, Hashable};
 
 use crate::dids::structs::{
     DidKeyPair,
@@ -13,7 +8,12 @@ use crate::dids::structs::{
 };
 use crate::dids::traits::DidResolver;
 
+use simple_database::database::Index;
+use simple_database::Indexable;
+
 use serde::{Serialize, Deserialize};
+
+use either::Either;
 
 pub type Verifier = Either<Did, PublicKey>;
 pub type Signer = Either<DidKeyPair, SecretKey>;
@@ -40,7 +40,7 @@ impl Signature {
     }
 
     pub fn verify_with_key(&self, key: &PublicKey, payload: &[u8]) -> Result<(), Error> {
-        key.verify(payload, &self.inner)
+        Ok(key.verify(payload, &self.inner)?)
     }
 
     pub async fn verify(&self, did_resolver: &dyn DidResolver, verifier: Option<&Verifier>, payload: &[u8]) -> Result<Verifier, Error> {
@@ -49,7 +49,7 @@ impl Signature {
         if *verifier != self.signer {return Err(Error::auth_failed(ec, "Verifier did not match Signer"));}
         let dk = match &self.signer {
             Either::Left(did) => {
-                did_resolver.resolve_dwn_key(did).await?
+                did_resolver.resolve_dwn_keys(did).await?.0
             },
             Either::Right(key) => key.clone()
         };
@@ -71,6 +71,7 @@ impl<O: SignableObject> Hashable for SignedObject<O> where O: Hashable + Seriali
 
 impl<O: SignableObject> SignedObject<O> where O: Serialize + for<'a> Deserialize<'a> {
     pub fn inner(&self) -> &O {&self.inner}
+    pub fn unwrap(self) -> O {self.inner}
     pub fn signer(&self) -> &Verifier {self.signature.signer()}
     pub fn from_keypair(keypair: &DidKeyPair, inner: O) -> Result<Self, Error> {
         Self::new(Either::Left(keypair.clone()), inner)
@@ -88,11 +89,8 @@ impl<O: SignableObject> SignedObject<O> where O: Serialize + for<'a> Deserialize
         self.signature.verify_with_key(key, &serde_json::to_vec(&self.inner)?)?;
         Ok(self.inner)
     }
-    pub async fn verify(self, did_resolver: &dyn DidResolver, verifier: Option<&Verifier>) -> Result<(Verifier, O), Error> {
-        Ok((
-            self.signature.verify(did_resolver, verifier, &serde_json::to_vec(&self.inner)?).await?,
-            self.inner
-        ))
+    pub async fn verify(&self, did_resolver: &dyn DidResolver, verifier: Option<&Verifier>) -> Result<Verifier, Error> {
+        self.signature.verify(did_resolver, verifier, &serde_json::to_vec(&self.inner)?).await
     }
 }
 

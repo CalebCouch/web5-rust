@@ -4,17 +4,17 @@ use super::structs::{Did, DidMethod, DidType, DidKey, DidKeyPurpose, DidService}
 use super::traits::DidDocument;
 use super::DhtDocument;
 
-use crate::common::structs::Url;
 use crate::common::Convert;
 
-use crate::crypto::ed25519::PublicKey as EDPublicKey;
+use crate::ed25519::PublicKey as EDPublicKey;
+use simple_crypto::PublicKey;
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use simple_dns::{Packet, PacketFlag, ResourceRecord, CLASS, Name};
 use simple_dns::rdata::{RData, TXT, NS};
-use crate::crypto::secp256k1::PublicKey;
+use url::Url;
 
 const DID_DHT_SPECIFICATION_VERSION: i32 = 0;
 const DNS_RECORD_TTL: u32 = 7200;
