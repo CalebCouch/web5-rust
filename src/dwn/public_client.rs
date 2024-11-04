@@ -19,8 +19,7 @@ use super::traits::Router;
 use simple_crypto::Hash;
 
 use crate::dids::signing::{SignedObject, Signer, Verifier};
-use crate::dids::traits::DidResolver;
-use crate::dids::structs::Did;
+use crate::dids::{DidResolver, Did};
 
 use std::collections::BTreeSet;
 
@@ -73,7 +72,7 @@ impl PublicClient {
             if let Ok(signer) = record.inner.verify(&*self.did_resolver, None).await {
                 let (record, _) = record.inner.unwrap();
                 if let Ok(protocol) = self.protocol_fetcher.get(&record.protocol) {
-                    if protocol.validate_payload(&record.payload).is_ok() {
+                    if record.validate(protocol).is_ok() {
                         results.push((signer, record));
                     }
                 }

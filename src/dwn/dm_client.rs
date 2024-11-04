@@ -12,13 +12,12 @@ use super::structs::{
 use super::permission::PermissionSet;
 use super::traits::Router;
 
-use crate::common::DateTime;
+use chrono::{DateTime, Utc};
 
 use simple_crypto::SecretKey;
 
 use crate::dids::signing::SignedObject;
-use crate::dids::traits::DidResolver;
-use crate::dids::structs::{DidKeyPair, Did};
+use crate::dids::{DidResolver, DidKeyPair, Did};
 
 use either::Either;
 
@@ -59,7 +58,7 @@ impl DMClient {
 
     pub async fn read(
         &self,
-        timestamp: DateTime
+        timestamp: DateTime<Utc>
     ) -> Result<Vec<(Did, PermissionSet)>, Error> {
         let request: DMReadRequest = SignedObject::from_key(&self.com_key, timestamp)?;
         let request = DwnRequest::new(Type::DM, Action::Read, serde_json::to_vec(&request)?);

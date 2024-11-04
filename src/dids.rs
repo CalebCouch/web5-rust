@@ -1,10 +1,23 @@
 use super::error::Error;
-pub mod traits;
-pub mod structs;
+mod traits;
+pub use traits::{DidResolver, DidDocument};
+mod structs;
+pub use structs::{
+    DefaultDidResolver,
+    DidService,
+    DidKeyPair,
+    DidKeyUri,
+    DidMethod,
+    Endpoint,
+    Identity,
+    DidType,
+    DidUri,
+    Did
+};
 pub mod signing;
 
-pub mod dht_document;
+mod dht_document;
 pub use dht_document::{DhtDocument};
 
-pub mod pkarr;
-pub mod dns_packet;
+mod pkarr;
+mod dns_packet;

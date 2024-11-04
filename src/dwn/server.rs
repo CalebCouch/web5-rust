@@ -22,8 +22,7 @@ use super::structs::{
 use super::json_rpc::JsonRpc;
 use super::traits::Router;
 
-use crate::dids::structs::{DefaultDidResolver, Did};
-use crate::dids::traits::DidResolver;
+use crate::dids::{DefaultDidResolver, DidResolver, Did};
 use crate::dids::signing::Verifier;
 
 use simple_crypto::SecretKey;
@@ -34,6 +33,7 @@ use std::path::PathBuf;
 
 pub type DM = UuidKeyed<DwnItem>;
 
+#[derive(Clone)]
 pub struct Server {
     pub tenant: Did,
     pub com_key: SecretKey,
@@ -206,7 +206,7 @@ impl Server {
                         if let Ok(Verifier::Right(key)) = payload.verify(&*self.did_resolver, None).await {
                             let timestamp = payload.unwrap();
                             let filters = FiltersBuilder::build(vec![
-                                ("timestamp_stored", Filter::cmp(CmpType::GT, timestamp.inner)),
+                                ("timestamp_stored", Filter::cmp(CmpType::GT, timestamp)),
                                 ("discover", Filter::equal(key.to_vec()))
                             ]);
                             let results = Some(self.dms_database.query::<DM>(&filters, None)?.0

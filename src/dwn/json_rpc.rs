@@ -3,8 +3,7 @@ use super::Error;
 use super::traits::Router;
 use super::structs::{Packet, DwnResponse, DwnRequest, Action, Type};
 use super::Server;
-use crate::dids::traits::DidResolver;
-use crate::dids::structs::{DefaultDidResolver, Endpoint, Did};
+use crate::dids::{DefaultDidResolver, DidResolver, Endpoint, Did};
 
 use url::Url;
 use tokio::sync::Mutex;
@@ -39,27 +38,6 @@ impl JsonRpc {
     ) -> Self {
         let did_resolver = did_resolver.unwrap_or(Box::new(DefaultDidResolver::new()));
         JsonRpc{did_resolver}
-    }
-
-    pub async fn client_debug(&self, url: &str) -> Result<String, Error> {
-        Client{
-            my_client: reqwest::Client::new(),
-            url: reqwest::Url::parse(url)?
-        }.debug().await.map_err(|e| Error::JsonRpc(e.to_string()))
-    }
-    pub async fn client_health(&self, url: &str) -> Result<String, Error> {
-        Client{
-            my_client: reqwest::Client::new(),
-            url: reqwest::Url::parse(url)?
-        }.health().await.map_err(|e| Error::JsonRpc(e.to_string()))
-    }
-
-    async fn health() -> Result<String, JsonError> {
-        Ok(String::from("200: OK"))
-    }
-
-    async fn debug(data: Data<Mutex<Server>>) -> Result<String, JsonError> {
-        Ok(format!("{:#?}", data.lock().await))
     }
 
     async fn process_packet(data: Data<Mutex<Server>>, Params(params): Params<Packet>) -> Result<DwnResponse, JsonError> {
@@ -111,8 +89,6 @@ impl Router for JsonRpc {
         let rpc = JsonServer::new()
             .with_data(Data::new(Mutex::new(dwn)))
             .with_method("process_packet", Self::process_packet)
-            .with_method("health", Self::health)
-            .with_method("debug", Self::debug)
             .finish();
         let server = actix_web::HttpServer::new(move || {
             actix_web::App::new().service(

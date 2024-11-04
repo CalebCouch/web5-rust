@@ -3,6 +3,7 @@ use super::Error;
 use simple_crypto::{SecretKey, Hash, Key};
 
 use super::structs::DwnKey;
+use super::protocol::Protocol;
 
 use schemars::JsonSchema;
 use serde::{Serialize, Deserialize};
@@ -97,6 +98,16 @@ impl PermissionSet {
                 read: Key::new_secret(key.derive_usize(6)?),
             })
         })
+    }
+
+    pub fn trim(mut self, protocol: &Protocol) -> Self {
+        if !protocol.delete {self.delete = None;}
+        if protocol.channel.is_none() {self.channel = None;}
+        self
+    }
+
+    pub fn get_min_perms(self, protocol: &Protocol) -> Result<PermissionSet, Error> {
+        self.trim(protocol).subset(&protocol.permissions)
     }
 
     pub fn subset(self, options: &PermissionOptions) -> Result<Self, Error> {

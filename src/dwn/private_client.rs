@@ -15,13 +15,13 @@ use super::structs::{
 };
 
 use super::permission::{PermissionSet, PermissionOptions};
-use super::protocol::Protocol;
+use super::protocol::{SystemProtocols, Protocol};
 use super::traits::Router;
 
 use simple_crypto::{SecretKey, Key, Hashable, Hash};
 
 use crate::dids::signing::SignedObject;
-use crate::dids::structs::Did;
+use crate::dids::Did;
 
 
 #[derive(Debug, Clone)]
@@ -71,8 +71,8 @@ impl PrivateClient {
     ) -> Result<(Option<PermissionedRecord>, bool), Error> {
         let (perm_record, exists) = self.internal_read(perms, None, dids).await?;
         if let Some(perm_record) = perm_record {
-            if perm_record.1.protocol == Protocol::pointer().hash() || perm_record.1.protocol == Protocol::perm_pointer().hash() {
-                let pointer_perms = serde_json::from_slice::<PermissionSet>(&perm_record.1.payload)?;
+            if perm_record.record.protocol == SystemProtocols::pointer().hash() || perm_record.record.protocol == SystemProtocols::perm_pointer().hash() {
+                let pointer_perms = serde_json::from_slice::<PermissionSet>(&perm_record.record.payload)?;
                 if let (Some(pr), _) = Box::pin(self.resolve_pointers(&pointer_perms, dids)).await? {
                     return Ok((Some(pr), exists));
                 } else {
@@ -80,7 +80,8 @@ impl PrivateClient {
                     self.delete(perms, dids).await?;
                 }
             } else {
-                return Ok((Some((perm_record.0.combine(perms.clone())?, perm_record.1)), exists));
+                let record = PermissionedRecord::new(perm_record.perms.combine(perms.clone())?, perm_record.record);
+                return Ok((Some(record), exists));
             }
         }
         Ok((None, exists))
@@ -129,7 +130,7 @@ impl PrivateClient {
     ) -> Result<usize, Error> {
         let error = |r: &str| Error::bad_request("Client.create_child", r);
 
-        let parent_perms = &parent.0;
+        let parent_perms = &parent.perms;
 
         let channel = parent_perms.channel.as_ref().ok_or(error("Missing Channel Perms"))?;
         let discover_child = channel.discover.secret_key().ok_or(error("Missing DiscoverChild Perms"))?;
@@ -139,10 +140,10 @@ impl PrivateClient {
         let create = channel.create.secret_key().ok_or(error("Missing CreateChild Perms"))?;
 
         let protocol = self.protocol_fetcher.get(&record.protocol)?;
-        let item_perms = protocol.subset_perms(&PermissionSet::new(
+        let item_perms = PermissionSet::new(
             vec![b"channelitem".to_vec().hash()], discover, channel.create.clone(), channel.read.clone(), None, None
-        ))?;
-        let record = (item_perms, record);//Record::new(None, protocol.hash(), serde_json::to_vec(child_perms)?));
+        ).get_min_perms(protocol)?;
+        let record = PermissionedRecord::new(item_perms, record);
         let item = Self::construct_dwn_item(&create, record)?;
         let request = DwnRequest::new(Type::Private, Action::Create, serde_json::to_vec(&item)?);
         self.router.handle_request(&request, dids).await?;
@@ -160,8 +161,8 @@ impl PrivateClient {
         let error = |r: &str| Error::bad_request("Client.read_child", r);
         let start = start.unwrap_or(0);
 
-        let parent_perms = &parent.0;
-        let parent_protocol = self.protocol_fetcher.get(&parent.1.protocol)?;
+        let parent_perms = &parent.perms;
+        let parent_protocol = self.protocol_fetcher.get(&parent.record.protocol)?;
 
         let channel = parent_perms.channel.as_ref().ok_or(error("Missing Channel Perms"))?;
         let discover_child = channel.discover.secret_key().ok_or(error("Missing DiscoverChild Perms"))?;
@@ -184,7 +185,7 @@ impl PrivateClient {
             if exists {empties = 0} else {empties += 1}
 
             if let Some(perm_item) = perm_item {
-                if parent_protocol.validate_child(&perm_item).is_ok() {
+                if perm_item.is_valid_child(parent_protocol).is_ok() {
                     results.push((perm_item, index));
                 }
             }
@@ -226,16 +227,14 @@ impl PrivateClient {
             if let Ok(dc) = read.decrypt(&item.payload) {
                 if let Ok(signed) = serde_json::from_slice::<SignedObject<PermissionedRecord>>(&dc) {
                     if let Ok(pr) = signed.verify_with_key(&create) {
-                        if let Some(protocol) = protocol.or_else(|| self.protocol_fetcher.get(&pr.1.protocol).ok()) {
-                            let perms = protocol.trim_perms(perms.clone());
+                        if let Some(protocol) = protocol.or_else(|| self.protocol_fetcher.get(&pr.record.protocol).ok()) {
+                            let perms = perms.clone().trim(protocol);
                             let delete = perms.delete.as_ref().map(|d| d.public_key());
-                            perms.validate(&pr.0).unwrap();
-                            protocol.validate(&pr).unwrap();
-                            if perms.validate(&pr.0).is_ok() &&
-                               protocol.validate(&pr).is_ok() &&
+                            if perms.validate(&pr.perms).is_ok() &&
+                               pr.validate(protocol).is_ok() &&
                                item.discover == discover && item.delete == delete {
-                                if let Ok(perms) = pr.0.combine(perms) {
-                                    return Some((perms, pr.1));
+                                if let Ok(perms) = pr.perms.combine(perms) {
+                                    return Some(PermissionedRecord::new(perms, pr.record));
                                 }
                             }
                         }
@@ -276,9 +275,9 @@ impl PrivateClient {
         &self,
         perms: PermissionSet,
     ) -> PermissionedRecord {
-        let protocol = Protocol::root();
+        let protocol = SystemProtocols::root();
         let root_record = Record::new(Some(Hash::all_zeros()), protocol.hash(), Vec::new());
-        (protocol.trim_perms(perms), root_record)
+        PermissionedRecord::new(perms.trim(&protocol), root_record)
     }
 
     fn construct_perm_record(
@@ -289,9 +288,9 @@ impl PrivateClient {
     ) -> Result<(PermissionSet, PermissionedRecord), Error> {
         let protocol = self.protocol_fetcher.get(&record.protocol)?;
         let permission_options = permission_options.unwrap_or(&protocol.permissions);
-        let trimmed_perms = protocol.trim_perms(perms);
-        let perm_record = (trimmed_perms.clone().subset(permission_options)?, record);
-        protocol.validate(&perm_record)?;
+        let trimmed_perms = perms.trim(protocol);
+        let perm_record = PermissionedRecord::new(trimmed_perms.clone().subset(permission_options)?, record);
+        perm_record.validate(protocol)?;
         Ok((trimmed_perms, perm_record))
     }
 
@@ -299,7 +298,7 @@ impl PrivateClient {
         create: &SecretKey,
         perm_record: PermissionedRecord,
     ) -> Result<DwnItem, Error> {
-        let perms = &perm_record.0;
+        let perms = &perm_record.perms;
         let discover = perms.discover.public_key();
         if create.public_key() != perms.create.public_key() {
             return Err(Error::bad_request("Client.construct_dwn_item", "Create Permission Does Not Match"));

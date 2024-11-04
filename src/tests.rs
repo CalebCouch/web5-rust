@@ -64,60 +64,12 @@ impl std::fmt::Debug for MemoryDidResolver {
     }
 }
 
-//  fn new_did_doc(
-//      did_resolver: &mut MemoryDidResolver,
-//      service_endpoints: Vec<String>
-//  ) -> Result<(DhtDocument, Did, DidKeyPair, DidKeyPair), Error> {
-
-//      let id_key = ed25519::SecretKey::new().public_key();
-//      let did = Did::new(DidMethod::DHT, id_key.thumbprint());
-
-//      let sec_sig_key = SecretKey::new();
-//      let sig_key = DidKey::new(
-//          Some("sig".to_string()),
-//          did.clone(),
-//          sec_sig_key.public_key(),
-//          vec![DidKeyPurpose::Auth, DidKeyPurpose::Asm, DidKeyPurpose::Agm],
-//          None
-//      );
-
-//      let sec_com_key = SecretKey::new();
-//      let com_key = DidKey::new(
-//          Some("com".to_string()),
-//          did.clone(),
-//          sec_com_key.public_key(),
-//          vec![DidKeyPurpose::Auth, DidKeyPurpose::Asm, DidKeyPurpose::Agm],
-//          None
-//      );
-
-//      let mut keys = BTreeMap::default();
-//      keys.insert("sig".to_string(), sig_key.clone());
-//      keys.insert("com".to_string(), com_key.clone());
-
-//      let mut services = BTreeMap::default();
-//      services.insert("dwn".to_string(), DidService::new_dwn(service_endpoints));
-
-//      let doc = DhtDocument::new(id_key, Vec::new(), Vec::new(), services, keys, Vec::new());
-//      did_resolver.store(Box::new(doc.clone()));
-//      Ok((doc, did, DidKeyPair::new(sec_sig_key, sig_key)?, DidKeyPair::new(sec_com_key, com_key)?))
-//  }
-
 fn get_user(servers: Vec<Did>) -> Result<(DhtDocument, Identity), Error> {
     DhtDocument::default(servers.iter().map(|d| d.to_string()).collect())
 }
 
 fn get_server(ports: Vec<u32>) -> Result<(DhtDocument, Identity), Error> {
     DhtDocument::default(ports.iter().map(|p| format!("http://localhost:{}", p)).collect())
-}
-
-#[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RoomPayload {
-    pub name: String
-}
-
-#[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct MessagePayload {
-    pub text: String
 }
 
 #[tokio::test]
@@ -215,21 +167,21 @@ async fn group_messaging() {
         );
 
 
-      //let record = Record::new(None, rooms_protocol.hash(), serde_json::to_vec("HELLOWORLD")?);
-      //let record_id = record.record_id;
-      //alice_agent.public_create(record, BTreeMap::default(), &[&a_did]).await?;
+        let record = Record::new(None, rooms_protocol.hash(), serde_json::to_vec("HELLOWORLD")?);
+        let record_id = record.record_id;
+        alice_agent.public_create(record, BTreeMap::default(), &[&a_did]).await?;
 
-      //let filters = FiltersBuilder::build(vec![
-      //    ("primary_key", Filter::equal(record_id.to_vec()))
-      //]);
-      //println!("{:#?}", alice_agent.public_read(filters.clone(), None, &[&a_did]).await?);
+        let filters = FiltersBuilder::build(vec![
+            ("primary_key", Filter::equal(record_id.to_vec()))
+        ]);
+        println!("{:#?}", alice_agent.public_read(filters.clone(), None, &[&a_did]).await?);
 
-      //let record = Record::new(Some(record_id), rooms_protocol.hash(), serde_json::to_vec("H")?);
-      //alice_agent.public_update(record, BTreeMap::default(), &[&a_did]).await?;
-      //println!("{:#?}", alice_agent.public_read(filters.clone(), None, &[&a_did]).await?);
+        let record = Record::new(Some(record_id), rooms_protocol.hash(), serde_json::to_vec("H")?);
+        alice_agent.public_update(record, BTreeMap::default(), &[&a_did]).await?;
+        println!("{:#?}", alice_agent.public_read(filters.clone(), None, &[&a_did]).await?);
 
-      //alice_agent.public_delete(record_id, &[&a_did]).await?;
-      //println!("{:#?}", alice_agent.public_read(filters, None, &[&a_did]).await?);
+        alice_agent.public_delete(record_id, &[&a_did]).await?;
+        println!("{:#?}", alice_agent.public_read(filters, None, &[&a_did]).await?);
 
 
 
@@ -269,54 +221,6 @@ async fn group_messaging() {
 
         println!("record: {:#?}", bob_agent.read(&room_path, None, &[&b_did]).await?.is_some());
 
-
-
-      //let record = Record::new(None, messages_protocol.hash(), serde_json::to_vec("HELLO")?);
-      //let msg_path = [room_path.clone(), vec![record.record_id]].concat();
-      //alice_agent.create(
-      //    &room_path,
-      //    Some(&PermissionOptions::new(true, true, false, None)),
-      //    record,
-      //    &[&a_did]
-      //).await?;
-
-      //println!("record: {:#?}", alice_agent.read(&room_path, Some(0), &[&a_did]).await?.is_some());
-      //println!("record: {:#?}", alice_agent.read(&msg_path, None, &[&a_did]).await?.is_some());
-
-      //alice_agent.delete(&msg_path, &[&a_did]).await?;
-
-      //println!("record: {:#?}", alice_agent.read(&room_path, Some(0), &[&a_did]).await?.is_some());
-      //println!("record: {:#?}", alice_agent.read(&msg_path, None, &[&a_did]).await?.is_some());
-
-
-        //Records
-      //let record = Record::new(rooms_protocol.hash(), serde_json::to_vec("HELLOWORLD")?);
-      //let (room_perm, index) = alice_agent.create(None,
-      //    &PermissionOptions::new(true, true, false, Some(
-      //        ChannelPermissionOptions::new(true, true, true)
-      //    )),
-      //    record, &[&a_did]
-      //).await?;
-
-      //println!("record: {:?}", alice_agent.read(&room_perm, &[&a_did]).await?.is_some());
-      //println!("index: {:?}", index);
-      //println!("record by index: {:?}",
-      //    alice_agent.read_child(
-      //        &alice_agent.get_permission(&Path::new(rooms_protocol.hash(), vec![]))?,
-      //        index, &[&a_did]
-      //    ).await?.is_some()
-      //);
-
-
-      //let record = Record::new(None, messages_protocol.hash(), serde_json::to_vec(b"HELLOWORLD")?);
-      //let (message_perm, index) = alice_agent.create(Some(&room_perm),
-      //    &PermissionOptions::new(true, true, false, None),
-      //    record, &[&a_did]
-      //).await?;
-
-      //println!("record: {:?}", alice_agent.read(&message_perm, &[&a_did]).await?.is_some());
-      //println!("index: {:?}", index);
-      //println!("record by index: {:?}", alice_agent.read_child(&room_perm, index, &[&a_did]).await?.is_some());
 
         println!("ARD: {}", JsonRpc::new(did_resolver.clone()).client_debug("http://localhost:3000").await?);
         println!("BRD: {}", JsonRpc::new(did_resolver.clone()).client_debug("http://localhost:3001").await?);

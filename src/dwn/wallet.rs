@@ -1,18 +1,17 @@
 use super::Error;
 
 use crate::ed25519::SecretKey as EdSecretKey;
-use simple_crypto::{PublicKey, Hashable, Hash};
+use simple_crypto::{PublicKey, Hashable};
 use simple_database::database::{FiltersBuilder, Filter, IndexBuilder};
 
-use crate::dids::structs::{Identity, DidKeyPair, Did};
+use crate::dids::{Identity, DidKeyPair, Did};
 use super::structs::{AgentKey, DwnKey, Record};
 use super::Agent;
 
-use super::protocol::Protocol;
+use super::protocol::{SystemProtocols, Protocol};
 
-use std::collections::BTreeMap;
 use super::traits::Router;
-use crate::dids::traits::DidResolver;
+use crate::dids::DidResolver;
 
 
 pub struct Wallet {
@@ -40,14 +39,15 @@ impl Wallet {
         }
     }
 
-    pub fn tenant(&self) -> &Did {&self.sig_key.public.did}
+    fn tenant(&self) -> &Did {&self.sig_key.public.did}
 
-    pub async fn get_agent_key(&self, protocol: &Hash) -> Result<AgentKey, Error> {
-        let root_agent_key = AgentKey::new(self.sig_key.clone(), self.enc_key.clone(), self.com_key.clone());
-        let pf = Protocol::protocol_folder(protocol);
-        let agent = Agent::new(root_agent_key, BTreeMap::from([(pf.hash(), pf.clone())]), self.router.clone(), self.did_resolver.clone());
+    pub async fn get_agent_key(&self, protocol: &Protocol) -> Result<AgentKey, Error> {
+        let protocol_hash = protocol.hash();
+        let root_agent_key = AgentKey::new(self.sig_key.clone(), self.enc_key.clone(), self.com_key.clone(), protocol_hash);
+        let pf = SystemProtocols::protocol_folder(protocol_hash);
+        let agent = Agent::new(root_agent_key, vec![pf.clone()], self.router.clone(), self.did_resolver.clone());
 
-        let record = Record::new(Some(*protocol), pf.hash(), Vec::new());
+        let record = Record::new(Some(protocol_hash), pf.hash(), Vec::new());
         agent.create(&[], None, record, &[self.tenant()]).await?;
         let filters = FiltersBuilder::build(vec![
             ("author", Filter::equal(self.tenant().to_string())),
@@ -57,15 +57,15 @@ impl Wallet {
             serde_json::from_slice::<Vec<PublicKey>>(&record.payload).ok()
         ).unwrap_or_default();
 
-        let enc_key = self.enc_key.from_path(&[*protocol])?;
+        let enc_key = self.enc_key.derive_path(&[protocol_hash])?;
         if !agent_keys.contains(&enc_key.key.public_key()) {
             agent_keys.push(enc_key.key.public_key());
-            let record = Record::new(None, Protocol::agent_keys().hash(), serde_json::to_vec(&agent_keys)?);
+            let record = Record::new(None, SystemProtocols::agent_keys().hash(), serde_json::to_vec(&agent_keys)?);
             let mut ib = IndexBuilder::new();
             ib.add("type", "agent_keys".to_string());
             agent.public_update(record, ib.finish(), &[self.tenant()]).await?;
         }
-        Ok(AgentKey::new(self.sig_key.clone(), enc_key, self.com_key.clone()))
+        Ok(AgentKey::new(self.sig_key.clone(), enc_key, self.com_key.clone(), protocol_hash))
     }
 }
 

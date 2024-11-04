@@ -1,15 +1,16 @@
 use super::Error;
 
 use super::permission::{PermissionSet};
-use super::protocol::Protocol;
+use super::protocol::{SystemProtocols, Protocol};
 
-use crate::common::DateTime;
+use chrono::{DateTime, Utc};
 
 use simple_crypto::{SecretKey, PublicKey, Hashable, Hash};
 
-use crate::dids::structs::{DidKeyPair, Did};
 use crate::dids::signing::{Signer, SignedObject};
+use crate::dids::{DidKeyPair, Did};
 
+use jsonschema::JSONSchema;
 use schemars::JsonSchema;
 use serde::{Serialize, Deserialize};
 
@@ -19,26 +20,76 @@ use simple_database::database::{IndexBuilder, Index, Filters, SortOptions};
 use simple_database::Indexable;
 
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Record {
     pub record_id: Hash,
     pub protocol: Hash,
     pub payload: Vec<u8>,
-  //pub channel_deletes: Vec<usize>
 }
 
 impl Record {
     pub fn new(record_id: Option<Hash>, protocol: Hash, payload: Vec<u8>) -> Self {
-        Record{record_id: record_id.unwrap_or(payload.hash()), protocol, payload}//, channel_deletes: Vec::new()}
+        Record{record_id: record_id.unwrap_or(payload.hash()), protocol, payload}
     }
-  //pub fn get_latest_delete(&self) -> usize {
-  //    self.channel_deletes.iter().max_by_key(|i| *i).copied().unwrap_or_default()
-  //}
+
+    pub fn validate(&self, protocol: &Protocol) -> Result<(), Error> {
+        let error = |r: &str| Error::bad_request("Protocol.validate_payload", r);
+        if let Some(schema) = protocol.schema.as_ref() {
+            JSONSchema::compile(&serde_json::from_str(schema)?)
+            .map_err(|e| error(&format!("schema failed to compile: {:?}", e)))?
+            .validate(&serde_json::from_slice(&self.payload)?)
+            .map_err(|e| error(&format!(
+                "schema failed for payload: {:?}",
+                e.map(|e| e.to_string()).collect::<Vec<String>>()
+            )))?;
+        } else if !self.payload.is_empty() {
+            return Err(error("Payload was not empty"));
+        }
+        Ok(())
+    }
 }
 
 impl Hashable for Record {}
 impl Indexable for Record {
     fn primary_key(&self) -> Vec<u8> {self.hash_bytes()}
+}
+
+#[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PermissionedRecord{
+    pub perms: PermissionSet,
+    pub record: Record
+}
+
+impl PermissionedRecord {
+    pub fn new(
+        perms: PermissionSet,
+        record: Record
+    ) -> Self {
+        PermissionedRecord{perms, record}
+    }
+
+    pub fn is_valid_child(&self, protocol: &Protocol) -> Result<(), Error> {
+        protocol.is_valid_child(&self.record.protocol)
+    }
+
+    pub fn validate(&self, protocol: &Protocol) -> Result<(), Error> {
+        let error = |r: &str| Error::bad_request("Protocol.validate", r);
+
+        if protocol.hash() != self.record.protocol {
+            return Err(error("Record does not use this protocol"));
+        }
+
+        let trimmed = self.perms.clone().trim(protocol);
+        if self.perms != trimmed {
+            return Err(error("Permission contained a delete key or channel keys which are unsupported by this protocol"));
+        }
+        trimmed.get_min_perms(protocol).or(Err(error(
+            "Permission could not meet minimum permission requirements"
+        )))?;
+
+        self.record.validate(protocol)?;
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
@@ -62,25 +113,6 @@ impl Indexable for PublicRecord {
         indexes.insert("payload_hash".to_string(), self.inner.inner().0.payload.hash().to_vec().into());
         indexes
     }
-}
-
-pub type PermissionedRecord = (PermissionSet, Record);
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct IndexCache {
-    pub discover: PublicKey,
-    pub latest_index: usize
-}
-
-impl IndexCache {
-    pub fn new(discover: PublicKey, latest_index: usize) -> Self {
-        IndexCache{discover, latest_index}
-    }
-}
-
-impl Hashable for IndexCache {}
-impl Indexable for IndexCache {
-    fn primary_key(&self) -> Vec<u8> {self.discover.to_vec()}
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -133,7 +165,7 @@ pub type PublicUpdateRequest = PublicRecord;
 pub type PublicDeleteRequest = SignedObject<Hash>;
 
 pub type DMCreateRequest = DwnItem;
-pub type DMReadRequest = SignedObject<DateTime>;
+pub type DMReadRequest = SignedObject<DateTime<Utc>>;
 
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -214,7 +246,7 @@ impl DwnKey {
         DwnKey{key, path: vec![]}
     }
 
-    pub fn from_path(&self, path: &[Hash]) -> Result<Self, Error> {
+    pub fn derive_path(&self, path: &[Hash]) -> Result<Self, Error> {
         if let Some(striped_path) = path.strip_prefix(self.path.as_slice()) {
             let mut key = self.key.clone();
             for hash in striped_path {
@@ -232,8 +264,9 @@ pub struct ProtocolFetcher {
 }
 
 impl ProtocolFetcher {
-    pub fn new(other: BTreeMap<Hash, Protocol>) -> Self {
-        ProtocolFetcher{sys: Protocol::system_protocols(), other}
+    pub fn new(others: Vec<Protocol>) -> Self {
+        let other = BTreeMap::from_iter(others.into_iter().map(|p| (p.hash(), p)));
+        ProtocolFetcher{sys: SystemProtocols::get_map(), other}
     }
 
     pub fn get(&self, protocol: &Hash) -> Result<&Protocol, Error> {
@@ -247,6 +280,7 @@ pub struct AgentKey {
     pub sig_key: DidKeyPair,
     pub enc_key: DwnKey,
     pub com_key: DwnKey,
+    pub master_protocol: Hash,
 }
 
 impl AgentKey {
@@ -254,7 +288,8 @@ impl AgentKey {
         sig_key: DidKeyPair,
         enc_key: DwnKey,
         com_key: DwnKey,
+        master_protocol: Hash,
     ) -> Self {
-        AgentKey{sig_key, enc_key, com_key}
+        AgentKey{sig_key, enc_key, com_key, master_protocol}
     }
 }

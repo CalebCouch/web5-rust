@@ -1,13 +1,13 @@
 use super::Error;
 
-use super::structs::PermissionedRecord;
 use super::permission::{
     ChannelPermissionOptions,
     PermissionOptions,
     PermissionSet,
 };
 
-use crate::common::{Schemas, DateTime};
+use crate::common::Schemas;
+use chrono::{DateTime, Utc};
 
 use simple_crypto::{PublicKey, Hashable, Hash};
 
@@ -16,13 +16,11 @@ use std::collections::BTreeMap;
 use simple_database::Indexable;
 
 use schemars::{JsonSchema, schema_for};
-use jsonschema::JSONSchema;
 use serde::{Serialize, Deserialize};
 
 #[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChannelProtocol {
     pub child_protocols: Option<Vec<Hash>>, //None for any child empty for no children
-    //pub delete: bool, //Weather child items can be deleted
 }
 impl ChannelProtocol {
     pub fn new(child_protocols: Option<Vec<Hash>>) -> Self {
@@ -53,11 +51,37 @@ impl Protocol {
         channel: Option<ChannelProtocol>
     ) -> Result<Self, Error> {
         let protocol = Protocol{name: name.to_string(), delete, permissions, schema, channel};
-        protocol.validate_self()?;
+        protocol.validate()?;
         Ok(protocol)
     }
 
-    pub fn system_protocols() -> BTreeMap<Hash, Protocol> {
+    pub fn is_valid_child(&self, child_protocol: &Hash) -> Result<(), Error> {
+        let error = |r: &str| Error::bad_request("Protocol.validate_child_protocol", r);
+        if let Some(channel) = &self.channel {
+            if let Some(cps) = &channel.child_protocols {
+                if !cps.contains(child_protocol) {
+                    return Err(error("ChildProtocol not supported by channel"));
+                }
+            }
+            Ok(())
+        } else {Err(error("Protocol Has No Channel"))}
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        let error = |r: &str| Error::bad_request("Protocol.validate_self", r);
+        if self.channel.is_some() != self.permissions.channel.is_some() {
+            return Err(error("Channel permission present with out channel protocol"));
+        }
+        if !self.delete && self.permissions.can_delete {
+            return Err(error("Delete Permission Required while deletese are disabled"));
+        }
+        Ok(())
+    }
+}
+
+pub struct SystemProtocols{}
+impl SystemProtocols {
+    pub fn get_map() -> BTreeMap<Hash, Protocol> {
         let dm = Self::dms_channel();
         let ak = Self::agent_keys();
         let dt = Self::date_time();
@@ -80,7 +104,7 @@ impl Protocol {
         ])
     }
 
-    pub fn root() -> Self {
+    pub fn root() -> Protocol {
         Protocol::new(
             "root",
             false,
@@ -92,7 +116,7 @@ impl Protocol {
         ).unwrap()
     }
 
-    pub fn protocol_folder(protocol: &Hash) -> Self {
+    pub fn protocol_folder(protocol: Hash) -> Protocol {
         Protocol::new(
             &format!("protocol_folder: {}", hex::encode(protocol.as_bytes())),
             false,
@@ -100,11 +124,11 @@ impl Protocol {
                 ChannelPermissionOptions::new(false, false, false)
             )),
             None,
-            Some(ChannelProtocol::new(Some(vec![*protocol])))
+            Some(ChannelProtocol::new(Some(vec![protocol])))
         ).unwrap()
     }
 
-    pub fn dms_channel() -> Self {
+    pub fn dms_channel() -> Protocol {
         Protocol::new(
             "dms_channel",
             true,
@@ -117,7 +141,7 @@ impl Protocol {
         ).unwrap()
     }
 
-    pub fn agent_keys() -> Self {
+    pub fn agent_keys() -> Protocol {
         Protocol::new(
             "agent_keys",
             true,
@@ -127,27 +151,17 @@ impl Protocol {
         ).unwrap()
     }
 
-  //pub fn protocols() -> Self {
-  //    Protocol::new(
-  //        "protocol",
-  //        true,
-  //        PermissionOptions::new(false, true, false, None),
-  //        Some(serde_json::to_string(&schema_for!(Protocol)).unwrap()),
-  //        None
-  //    ).unwrap()
-  //}
-
-    pub fn date_time() -> Self {
+    pub fn date_time() -> Protocol {
         Protocol::new(
             "date_time",
             true,
             PermissionOptions::new(true, true, true, None),
-            Some(serde_json::to_string(&schema_for!(DateTime)).unwrap()),
+            Some(serde_json::to_string(&schema_for!(DateTime<Utc>)).unwrap()),
             None
         ).unwrap()
     }
 
-    pub fn usize() -> Self {
+    pub fn usize() -> Protocol {
         Protocol::new(
             "date_time",
             true,
@@ -157,7 +171,7 @@ impl Protocol {
         ).unwrap()
     }
 
-    pub fn channel_item() -> Self {
+    pub fn channel_item() -> Protocol {
         Protocol::new(
             "channel_item",
             false,
@@ -167,7 +181,7 @@ impl Protocol {
         ).unwrap()
     }
 
-    pub fn perm_pointer() -> Self {
+    pub fn perm_pointer() -> Protocol {
         Protocol::new(
             "perm_pointer",
             false,
@@ -177,7 +191,7 @@ impl Protocol {
         ).unwrap()
     }
 
-    pub fn pointer() -> Self {
+    pub fn pointer() -> Protocol {
         Protocol::new(
             "pointer",
             true,
@@ -187,7 +201,7 @@ impl Protocol {
         ).unwrap()
     }
 
-    pub fn shared_pointer() -> Self {
+    pub fn shared_pointer() -> Protocol {
         Protocol::new(
             "shared_pointer",
             false,
@@ -195,78 +209,5 @@ impl Protocol {
             Some(serde_json::to_string(&schema_for!(Vec<Vec<u8>>)).unwrap()),
             None
         ).unwrap()
-    }
-
-    pub fn trim_perms(&self, mut perms: PermissionSet) -> PermissionSet {
-        if !self.delete {perms.delete = None;}
-        if self.channel.is_none() {perms.channel = None;}
-        perms
-    }
-
-    pub fn subset_perms(&self, perms: &PermissionSet) -> Result<PermissionSet, Error> {
-        Ok(self.trim_perms(perms.clone().subset(&self.permissions)?))
-    }
-
-    pub fn validate_child_protocol(&self, child_protocol: &Hash) -> Result<(), Error> {
-        let error = |r: &str| Error::bad_request("Protocol.validate_child_protocol", r);
-        if let Some(channel) = &self.channel {
-            if let Some(cps) = &channel.child_protocols {
-                if !cps.contains(child_protocol) {
-                    return Err(error("ChildProtocol not supported by channel"));
-                }
-            }
-            Ok(())
-        } else {Err(error("Protocol Has No Channel"))}
-    }
-
-    pub fn validate_child(&self, perm_record: &PermissionedRecord) -> Result<(), Error> {
-        self.validate_child_protocol(&perm_record.1.protocol)
-    }
-
-    pub fn validate(&self, permissioned_record: &PermissionedRecord) -> Result<(), Error> {
-        let error = |r: &str| Error::bad_request("Protocol.validate", r);
-        let (perms, record) = permissioned_record;
-        self.validate_self()?;
-        self.subset_perms(perms).or(Err(error(
-            "Permission could not meet minimum permission requirements"
-        )))?;
-        if *perms != self.trim_perms(perms.clone()) {
-            return Err(error("Permission contained a delete key or channel keys which are unsupported by this protocol"));
-        }
-        if self.hash() != record.protocol {
-            return Err(error("Record does not use this protocol"));
-        }
-        self.validate_payload(&record.payload)?;
-      //if if let Some(c) = &self.channel {!c.delete} else {true} && !record.channel_deletes.is_empty() {
-      //    return Err(error("Record contains delete child elements but deletes are not enabled"));
-      //}
-        Ok(())
-    }
-
-    pub fn validate_self(&self) -> Result<(), Error> {
-        let error = |r: &str| Error::bad_request("Protocol.validate_self", r);
-        if self.channel.is_some() != self.permissions.channel.is_some() {
-            return Err(error("Channel permission present with out channel protocol"));
-        }
-        if !self.delete && self.permissions.can_delete {
-            return Err(error("Delete Permission Required while deletese are disabled"));
-        }
-        Ok(())
-    }
-
-    pub fn validate_payload(&self, payload: &[u8]) -> Result<(), Error> {
-        let error = |r: &str| Error::bad_request("Protocol.validate_payload", r);
-        if let Some(schema) = self.schema.as_ref() {
-            JSONSchema::compile(&serde_json::from_str(schema)?)
-            .map_err(|e| error(&format!("schema failed to compile: {:?}", e)))?
-            .validate(&serde_json::from_slice(payload)?)
-            .map_err(|e| error(&format!(
-                "schema failed for payload: {:?}",
-                e.map(|e| e.to_string()).collect::<Vec<String>>()
-            )))?;
-        } else if !payload.is_empty() {
-            return Err(error("Payload was not empty"));
-        }
-        Ok(())
     }
 }

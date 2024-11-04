@@ -1,6 +1,6 @@
 use super::Error;
 
-use crate::dids::structs::{Did};
+use crate::dids::Did;
 use super::structs::DwnRequest;
 use super::Server;
 use dyn_clone::{clone_trait_object, DynClone};
