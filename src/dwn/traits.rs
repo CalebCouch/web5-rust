@@ -11,7 +11,7 @@ pub trait Router: DynClone + std::fmt::Debug + Sync + Send {
         &self,
         dwn: Server,
         port: u32
-    ) -> Result<(), Error>;
+    ) -> Result<actix_web::dev::Server, Error>;
 
     async fn handle_request(
         &self,

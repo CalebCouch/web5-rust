@@ -66,7 +66,7 @@ impl Server {
         })
     }
 
-    pub async fn start_server(self, port: u32) -> Result<(), Error> {
+    pub async fn start_server(self, port: u32) -> Result<actix_web::dev::Server, Error> {
         let router = self.router.clone();
         router.start_server(self, port).await
     }

@@ -85,7 +85,7 @@ impl JsonRpc {
 
 #[async_trait::async_trait]
 impl Router for JsonRpc {
-    async fn start_server(&self, dwn: Server, port: u32) -> Result<(), Error> {
+    async fn start_server(&self, dwn: Server, port: u32) -> Result<actix_web::dev::Server, Error> {
         let rpc = JsonServer::new()
             .with_data(Data::new(Mutex::new(dwn)))
             .with_method("process_packet", Self::process_packet)
@@ -97,8 +97,7 @@ impl Router for JsonRpc {
                     .finish(rpc.clone().into_web_service()),
             )
         });
-        tokio::spawn(server.bind(&format!("0.0.0.0:{}", port))?.run());
-        Ok(())
+        Ok(server.bind(&format!("0.0.0.0:{}", port))?.run())
     }
 
     async fn handle_request(
