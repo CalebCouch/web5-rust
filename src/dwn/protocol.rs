@@ -23,8 +23,8 @@ pub struct ChannelProtocol {
     pub child_protocols: Option<Vec<Hash>>, //None for any child empty for no children
 }
 impl ChannelProtocol {
-    pub fn new(child_protocols: Option<Vec<Hash>>) -> Self {
-        ChannelProtocol{child_protocols}
+    pub fn new(child_protocols: Option<Vec<&Protocol>>) -> Self {
+        ChannelProtocol{child_protocols: child_protocols.map(|cp| cp.into_iter().map(|p| p.hash()).collect())}
     }
 }
 
@@ -124,7 +124,7 @@ impl SystemProtocols {
                 ChannelPermissionOptions::new(false, false, false)
             )),
             None,
-            Some(ChannelProtocol::new(Some(vec![protocol])))
+            Some(ChannelProtocol{child_protocols: Some(vec![protocol])})
         ).unwrap()
     }
 

@@ -41,6 +41,7 @@ impl JsonRpc {
     }
 
     async fn process_packet(data: Data<Mutex<Server>>, Params(params): Params<Packet>) -> Result<DwnResponse, JsonError> {
+        println!("Processing Packet");
         Ok(data.lock().await.process_packet(params).await?)
     }
 
@@ -49,6 +50,7 @@ impl JsonRpc {
         p: Packet,
         url: Url
     ) -> Result<DwnResponse, Error> {
+        println!("url:_{}", url);
         let client = Client{
             my_client: reqwest::Client::new(),
             url
