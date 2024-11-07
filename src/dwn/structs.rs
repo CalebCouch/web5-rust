@@ -28,8 +28,8 @@ pub struct Record {
 }
 
 impl Record {
-    pub fn new(record_id: Option<Hash>, protocol: Hash, payload: Vec<u8>) -> Self {
-        Record{record_id: record_id.unwrap_or(payload.hash()), protocol, payload}
+    pub fn new(record_id: Option<Hash>, protocol: &Protocol, payload: Vec<u8>) -> Self {
+        Record{record_id: record_id.unwrap_or(payload.hash()), protocol: protocol.hash(), payload}
     }
 
     pub fn validate(&self, protocol: &Protocol) -> Result<(), Error> {

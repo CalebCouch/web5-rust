@@ -276,7 +276,7 @@ impl PrivateClient {
         perms: PermissionSet,
     ) -> PermissionedRecord {
         let protocol = SystemProtocols::root();
-        let root_record = Record::new(Some(Hash::all_zeros()), protocol.hash(), Vec::new());
+        let root_record = Record::new(Some(Hash::all_zeros()), &protocol, Vec::new());
         PermissionedRecord::new(perms.trim(&protocol), root_record)
     }
 

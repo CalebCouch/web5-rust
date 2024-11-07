@@ -65,7 +65,7 @@ impl Agent {
         let record_perms = self.get_permission(&record_path)?;
         let perm_parent = self.private_client.read(&self.get_permission(parent_path)?, dids).await?.ok_or(error("Parent could not be found"))?;
         let perms = self.private_client.create(record_perms, permission_options, record, dids).await?;
-        let record = Record::new(None, SystemProtocols::perm_pointer().hash(), serde_json::to_vec(&perms)?);
+        let record = Record::new(None, &SystemProtocols::perm_pointer(), serde_json::to_vec(&perms)?);
         self.private_client.create_child(&perm_parent, record, dids).await?;
         Ok(record_path)
     }
@@ -136,7 +136,7 @@ impl Agent {
             serde_json::from_slice::<Vec<PublicKey>>(&record.payload).ok()
         ).ok_or(Error::bad_request("Agent.share", "Recipient has no agents"))?
         .into_iter().map(|key| Ok(key.encrypt(&perms)?)).collect::<Result<Vec<Vec<u8>>, Error>>()?;
-        let record = Record::new(None, SystemProtocols::shared_pointer().hash(), serde_json::to_vec(&agent_keys)?);
+        let record = Record::new(None, &SystemProtocols::shared_pointer(), serde_json::to_vec(&agent_keys)?);
         self.private_client.create_child(
             &channel,
             record,
@@ -182,9 +182,9 @@ impl Agent {
                                 let parent_path = &sent_perms.path[..sent_perms.path.len()-1];
                                 if let Ok(my_parent_perms) = self.get_permission(parent_path) {
                                     if let Ok(Some(perm_parent)) = self.private_client.read(&my_parent_perms, &dids).await {
-                                        let record = Record::new(None, SystemProtocols::pointer().hash(), serde_json::to_vec(&sent_perms)?);
+                                        let record = Record::new(None, &SystemProtocols::pointer(), serde_json::to_vec(&sent_perms)?);
                                         let perms = self.private_client.create(my_perms, None, record, &dids).await?;
-                                        let record = Record::new(None, SystemProtocols::perm_pointer().hash(), serde_json::to_vec(&perms)?);
+                                        let record = Record::new(None, &SystemProtocols::perm_pointer(), serde_json::to_vec(&perms)?);
                                         self.private_client.create_child(&perm_parent, record, &dids).await?;
                                     }
                                 }
@@ -194,7 +194,7 @@ impl Agent {
                 }
             }
 
-            let record = Record::new(Some(ldi_id), SystemProtocols::usize().hash(), serde_json::to_vec(&last_dm_index)?);
+            let record = Record::new(Some(ldi_id), &SystemProtocols::usize(), serde_json::to_vec(&last_dm_index)?);
             self.private_client.update(ldi_perms, None, record, &dids).await?;
         }
         Ok(())
@@ -251,12 +251,12 @@ impl Agent {
             Ok(perm_record)
         } else {
             let protocol = SystemProtocols::dms_channel();
-            let record = Record::new(Some(recipient.hash()), protocol.hash(), Vec::new());
+            let record = Record::new(Some(recipient.hash()), &protocol, Vec::new());
 
             let perm_parent = self.private_client.read(&PermissionSet::from_key(&self.agent_key.com_key)?, &dids).await?
                 .ok_or(Error::bad_request("Agent.establish_direct_messages", "Parent Not Found"))?;
             let perms = self.private_client.create(perms.clone(), None, record, &dids).await?;
-            let record = Record::new(None, SystemProtocols::perm_pointer().hash(), serde_json::to_vec(&perms)?);
+            let record = Record::new(None, &SystemProtocols::perm_pointer(), serde_json::to_vec(&perms)?);
             self.private_client.create_child(&perm_parent, record, &[self.tenant()]).await?;
 
             self.dm_client.create(recipient, perms.clone()).await?;
@@ -276,7 +276,7 @@ impl Agent {
 
         for (sender, permission) in self.dm_client.read(last_dm_check).await? {
             if let Some(pr) = self.private_client.read(&permission, &dids).await? {
-                let record = Record::new(Some(sender.hash()), SystemProtocols::pointer().hash(), serde_json::to_vec(&pr.perms)?);
+                let record = Record::new(Some(sender.hash()), &SystemProtocols::pointer(), serde_json::to_vec(&pr.perms)?);
                 let channel_perms = PermissionSet::from_key(&self.agent_key.com_key.derive_path(&[sender.hash()])?)?;
 
                 let perm_parent = self.private_client.read(&PermissionSet::from_key(&self.agent_key.com_key)?, &dids).await?
@@ -285,11 +285,11 @@ impl Agent {
                 let perms = self.private_client.update(channel_perms, None, record, &dids).await?;
                 //let perms = self.private_client.create(perms.clone(), None, record, &dids).await?;
 
-                let record = Record::new(None, SystemProtocols::perm_pointer().hash(), serde_json::to_vec(&perms)?);
+                let record = Record::new(None, &SystemProtocols::perm_pointer(), serde_json::to_vec(&perms)?);
                 self.private_client.create_child(&perm_parent, record, &dids).await?;
             }
         }
-        let record = Record::new(Some(ldc_id), SystemProtocols::date_time().hash(), serde_json::to_vec(&Utc::now())?);
+        let record = Record::new(Some(ldc_id), &SystemProtocols::date_time(), serde_json::to_vec(&Utc::now())?);
         self.private_client.update(ldc_perms, None, record, &dids).await?;
         Ok(())
     }

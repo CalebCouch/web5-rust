@@ -47,7 +47,7 @@ impl Wallet {
         let pf = SystemProtocols::protocol_folder(protocol_hash);
         let agent = Agent::new(root_agent_key, vec![pf.clone()], self.router.clone(), self.did_resolver.clone());
 
-        let record = Record::new(Some(protocol_hash), pf.hash(), Vec::new());
+        let record = Record::new(Some(protocol_hash), &pf, Vec::new());
         agent.create(&[], None, record, None).await?;
         let filters = FiltersBuilder::build(vec![
             ("author", Filter::equal(self.tenant().to_string())),
@@ -60,7 +60,7 @@ impl Wallet {
         let enc_key = self.enc_key.derive_path(&[protocol_hash])?;
         if !agent_keys.contains(&enc_key.key.public_key()) {
             agent_keys.push(enc_key.key.public_key());
-            let record = Record::new(None, SystemProtocols::agent_keys().hash(), serde_json::to_vec(&agent_keys)?);
+            let record = Record::new(None, &SystemProtocols::agent_keys(), serde_json::to_vec(&agent_keys)?);
             let index = IndexBuilder::build(vec![("type", "agent_keys")]);
             agent.public_update(record, index, None).await?;
         }
