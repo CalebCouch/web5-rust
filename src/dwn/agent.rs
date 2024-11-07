@@ -17,6 +17,7 @@ use super::{PrivateClient, PublicClient, DMClient};
 use either::Either;
 
 pub struct Agent {
+    tenant: Did,
     agent_key: AgentKey,
     private_client: PrivateClient,
     public_client: PublicClient,
@@ -38,6 +39,7 @@ impl Agent {
         let dm_client = DMClient::new(agent_key.sig_key.clone(), agent_key.com_key.key.clone(), router.clone(), did_resolver.clone());
 
         Agent{
+            tenant: agent_key.sig_key.public.did.clone(),
             agent_key,
             private_client,
             public_client,
@@ -47,15 +49,17 @@ impl Agent {
 
     pub fn get_root(&self) -> &Vec<Hash> {&self.agent_key.enc_key.path}
 
-    pub fn tenant(&self) -> Did {self.agent_key.sig_key.public.did.clone()}
+    pub fn tenant(&self) -> &Did {&self.tenant}
 
     pub async fn create(
         &self,
         parent_path: &[Hash],
         permission_options: Option<&PermissionOptions>,
         record: Record,
-        dids: &[&Did],
+        dids: Option<&[&Did]>,
     ) -> Result<Vec<Hash>, Error> {
+        let default_dids = vec![self.tenant()];
+        let dids = dids.unwrap_or(&default_dids);
         let error = |r: &str| Error::bad_request("Agent.create", r);
         let record_path = [parent_path.to_vec(), vec![record.record_id]].concat();
         let record_perms = self.get_permission(&record_path)?;
@@ -70,8 +74,10 @@ impl Agent {
         &self,
         path: &[Hash],
         index: Option<(usize, Option<usize>)>,
-        dids: &[&Did]
+        dids: Option<&[&Did]>
     ) -> Result<Option<Record>, Error> {
+        let default_dids = vec![self.tenant()];
+        let dids = dids.unwrap_or(&default_dids);
         let perms = self.get_permission(path)?;
         if let Some(record) = self.private_client.read(&perms, dids).await? {
             if let Some((start, end)) = index {
@@ -89,8 +95,10 @@ impl Agent {
         path: &[Hash],
         permission_options: Option<&PermissionOptions>,
         record: Record,
-        dids: &[&Did],
+        dids: Option<&[&Did]>,
     ) -> Result<(), Error> {
+        let default_dids = vec![self.tenant()];
+        let dids = dids.unwrap_or(&default_dids);
         let perms = self.get_permission(path)?;
         self.private_client.update(perms, permission_options, record, dids).await?;
         Ok(())
@@ -99,8 +107,10 @@ impl Agent {
     pub async fn delete(
         &self,
         path: &[Hash],
-        dids: &[&Did],
+        dids: Option<&[&Did]>,
     ) -> Result<bool, Error> {
+        let default_dids = vec![self.tenant()];
+        let dids = dids.unwrap_or(&default_dids);
         if let Some(record) = self.private_client.read(&self.get_permission(path)?, dids).await? {
             self.private_client.delete(&record.perms, dids).await?;
             Ok(true)
@@ -122,7 +132,7 @@ impl Agent {
 
         let perms = serde_json::to_vec(&self.get_permission(path)?.subset(permission_options)?)?;
 
-        let agent_keys = self.public_read(filters, None, &[recipient]).await?.first().and_then(|(_, record)|
+        let agent_keys = self.public_read(filters, None, Some(&[recipient])).await?.first().and_then(|(_, record)|
             serde_json::from_slice::<Vec<PublicKey>>(&record.payload).ok()
         ).ok_or(Error::bad_request("Agent.share", "Recipient has no agents"))?
         .into_iter().map(|key| Ok(key.encrypt(&perms)?)).collect::<Result<Vec<Vec<u8>>, Error>>()?;
@@ -130,13 +140,13 @@ impl Agent {
         self.private_client.create_child(
             &channel,
             record,
-            &[&self.tenant(), recipient]
+            &[self.tenant(), recipient]
         ).await?;
         Ok(())
     }
 
     pub async fn scan(&self) -> Result<(), Error> {
-        let dids = [&self.tenant()];
+        let dids = [self.tenant()];
         self.check_did_messages().await?;
         let root = self.private_client.read(&PermissionSet::from_key(&self.agent_key.com_key)?, &dids).await?
                 .ok_or(Error::bad_request("Agent.establish_direct_messages", "Parent Not Found"))?;
@@ -194,8 +204,10 @@ impl Agent {
         &self,
         record: Record,
         index: Index,
-        dids: &[&Did]
+        dids: Option<&[&Did]>
     ) -> Result<(), Error> {
+        let default_dids = vec![self.tenant()];
+        let dids = dids.unwrap_or(&default_dids);
         self.public_client.create(record, index, dids).await
     }
 
@@ -203,8 +215,10 @@ impl Agent {
         &self,
         filters: Filters,
         sort_options: Option<SortOptions>,
-        dids: &[&Did]
+        dids: Option<&[&Did]>
     ) -> Result<Vec<(Verifier, Record)>, Error> {
+        let default_dids = vec![self.tenant()];
+        let dids = dids.unwrap_or(&default_dids);
         self.public_client.read(filters, sort_options, dids).await
     }
 
@@ -212,22 +226,26 @@ impl Agent {
         &self,
         record: Record,
         index: Index,
-        dids: &[&Did]
+        dids: Option<&[&Did]>
     ) -> Result<(), Error> {
+        let default_dids = vec![self.tenant()];
+        let dids = dids.unwrap_or(&default_dids);
         self.public_client.update(record, index, dids).await
     }
 
     pub async fn public_delete(
         &self,
         record_id: Hash,
-        dids: &[&Did]
+        dids: Option<&[&Did]>
     ) -> Result<(), Error> {
+        let default_dids = vec![self.tenant()];
+        let dids = dids.unwrap_or(&default_dids);
         self.public_client.delete(record_id, dids).await
     }
 
     async fn establish_direct_messages(&self, recipient: &Did) -> Result<PermissionedRecord, Error> {
         self.check_did_messages().await?;
-        let dids = [recipient, &self.tenant()];
+        let dids = [recipient, self.tenant()];
         let perms = PermissionSet::from_key(&self.agent_key.com_key.derive_path(&[recipient.hash()])?)?;
         if let Some(perm_record) = self.private_client.read(&perms, &dids).await? {
             Ok(perm_record)
@@ -239,7 +257,7 @@ impl Agent {
                 .ok_or(Error::bad_request("Agent.establish_direct_messages", "Parent Not Found"))?;
             let perms = self.private_client.create(perms.clone(), None, record, &dids).await?;
             let record = Record::new(None, SystemProtocols::perm_pointer().hash(), serde_json::to_vec(&perms)?);
-            self.private_client.create_child(&perm_parent, record, &[&self.tenant()]).await?;
+            self.private_client.create_child(&perm_parent, record, &[self.tenant()]).await?;
 
             self.dm_client.create(recipient, perms.clone()).await?;
             Ok(self.private_client.read(&perms, &dids).await?.ok_or(
@@ -249,7 +267,7 @@ impl Agent {
     }
 
     async fn check_did_messages(&self) -> Result<(), Error> {
-        let dids = [&self.tenant()];
+        let dids = [self.tenant()];
         let ldc_id = serde_json::to_vec("LAST_DM_CHECK")?.hash();
         let ldc_perms = PermissionSet::from_key(&self.agent_key.com_key.derive_path(&[ldc_id])?)?;
         let last_dm_check = self.private_client.read(&ldc_perms, &dids).await?.map(|record|
@@ -284,7 +302,7 @@ impl Agent {
 impl std::fmt::Debug for Agent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Agent")
-        //.field("tenant", &self.tenant().to_string())
+        //.field("tenant", self.tenant().to_string())
         .finish()
     }
 }
