@@ -11,6 +11,8 @@ pub use dwn::structs::Record;
 pub use dwn::traits::Router;
 pub use error::Error;
 
+pub extern crate simple_database;
+
 #[cfg(test)]
 mod tests;
 

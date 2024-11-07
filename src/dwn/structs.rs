@@ -142,9 +142,9 @@ impl Indexable for DwnItem {
         self.discover.to_vec()
     }
     fn secondary_keys(&self) -> Index {
-        let mut ib = IndexBuilder::new();
-        ib.add("delete", self.delete.as_ref().map(|d| d.to_vec()).unwrap_or_default());
-        ib.finish()
+        IndexBuilder::build(vec![
+            ("delete", self.delete.as_ref().map(|d| d.to_vec()).unwrap_or_default())
+        ])
     }
 }
 

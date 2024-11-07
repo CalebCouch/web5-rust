@@ -39,7 +39,7 @@ impl Wallet {
         }
     }
 
-    fn tenant(&self) -> &Did {&self.sig_key.public.did}
+    pub fn tenant(&self) -> &Did {&self.sig_key.public.did}
 
     pub async fn get_agent_key(&self, protocol: &Protocol) -> Result<AgentKey, Error> {
         let protocol_hash = protocol.hash();
@@ -61,9 +61,8 @@ impl Wallet {
         if !agent_keys.contains(&enc_key.key.public_key()) {
             agent_keys.push(enc_key.key.public_key());
             let record = Record::new(None, SystemProtocols::agent_keys().hash(), serde_json::to_vec(&agent_keys)?);
-            let mut ib = IndexBuilder::new();
-            ib.add("type", "agent_keys".to_string());
-            agent.public_update(record, ib.finish(), &[self.tenant()]).await?;
+            let index = IndexBuilder::build(vec![("type", "agent_keys")]);
+            agent.public_update(record, index, &[self.tenant()]).await?;
         }
         Ok(AgentKey::new(self.sig_key.clone(), enc_key, self.com_key.clone(), protocol_hash))
     }
