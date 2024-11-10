@@ -328,9 +328,9 @@ checksum = "96d30a06541fbafbc7f82ed10c06164cfbd2c401138f6addd8404629c4b16711"
 
 [[package]]
 name = "async-trait"
-version = "0.1.81"
+version = "0.1.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e0c28dcc82d7c8ead5cb13beb15405b57b8546e93215673ff8ca0349a028107"
+checksum = "721cae7de5c34fbb2acd27e21e6d2cf7b886dce0c27388d46c4e6c47ea4318dd"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2833,16 +2833,18 @@ dependencies = [
 
 [[package]]
 name = "simple-database"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0895c46d679ae860780578e8cd967f6b7a3720b9257559aab29df06d8ac8a0b0"
+checksum = "ac1a14a19d51de5088f75437b19a07c054eed09a2d8dbc06a0405470cbdcc707"
 dependencies = [
+ "async-trait",
  "chrono",
  "dyn-clone",
  "hex",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 
@@ -3049,9 +3051,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.39.2"
+version = "1.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daa4fb1bc778bd6f04cbfc4bb2d06a7396a8f299dc33ea1900cedaa316f467b1"
+checksum = "22cfb5bee7a6a52939ca9224d6ac897bb669134078daa8735560897f69de4d33"
 dependencies = [
  "backtrace",
  "bytes",
@@ -3378,7 +3380,7 @@ dependencies = [
 
 [[package]]
 name = "web5-rust"
-version = "1.1.7"
+version = "1.1.8"
 dependencies = [
  "actix-web",
  "async-trait",
@@ -3400,6 +3402,7 @@ dependencies = [
  "jsonschema",
  "k256",
  "leveldb",
+ "log",
  "num-traits",
  "p256",
  "rand 0.8.5",

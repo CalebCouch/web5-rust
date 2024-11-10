@@ -6,7 +6,7 @@ use super::permission::PermissionSet;
 use chrono::{DateTime, Utc};
 
 use super::json_rpc::JsonRpc;
-use crate::dids::{DefaultDidResolver, DidResolver, Did};
+use crate::dids::{DidResolver, Did};
 use crate::dids::signing::Verifier;
 use super::structs::{AgentKey, Record};
 use super::permission::PermissionOptions;
@@ -28,11 +28,10 @@ impl Agent {
     pub fn new(
         agent_key: AgentKey,
         protocols: Vec<Protocol>,
+        did_resolver: Box<dyn DidResolver>,
         router: Option<Box<dyn Router>>,
-        did_resolver: Option<Box<dyn DidResolver>>,
     ) -> Self {
-        let did_resolver = did_resolver.unwrap_or(Box::new(DefaultDidResolver::new()));
-        let router = router.unwrap_or(Box::new(JsonRpc::new(Some(did_resolver.clone()))));
+        let router = router.unwrap_or(Box::new(JsonRpc::new(did_resolver.clone())));
         let protocol_fetcher = ProtocolFetcher::new([vec![SystemProtocols::protocol_folder(agent_key.master_protocol)], protocols].concat());
         let private_client = PrivateClient::new(router.clone(), protocol_fetcher.clone());
         let public_client = PublicClient::new(Either::Left(agent_key.sig_key.clone()), router.clone(), did_resolver.clone(), protocol_fetcher.clone());

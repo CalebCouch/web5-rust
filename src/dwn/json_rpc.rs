@@ -3,7 +3,7 @@ use super::Error;
 use super::traits::Router;
 use super::structs::{Packet, DwnResponse, DwnRequest, Action, Type};
 use super::Server;
-use crate::dids::{DefaultDidResolver, DidResolver, Endpoint, Did};
+use crate::dids::{DidResolver, Endpoint, Did};
 
 use url::Url;
 use tokio::sync::Mutex;
@@ -34,14 +34,12 @@ pub struct JsonRpc {
 
 impl JsonRpc {
     pub fn new(
-        did_resolver: Option<Box<dyn DidResolver>>
+        did_resolver: Box<dyn DidResolver>
     ) -> Self {
-        let did_resolver = did_resolver.unwrap_or(Box::new(DefaultDidResolver::new()));
         JsonRpc{did_resolver}
     }
 
     async fn process_packet(data: Data<Mutex<Server>>, Params(params): Params<Packet>) -> Result<DwnResponse, JsonError> {
-        println!("Processing Packet");
         Ok(data.lock().await.process_packet(params).await?)
     }
 
@@ -50,7 +48,7 @@ impl JsonRpc {
         p: Packet,
         url: Url
     ) -> Result<DwnResponse, Error> {
-        println!("url:_{}", url);
+        log::info!("Sending packet to url: {}", url);
         let client = Client{
             my_client: reqwest::Client::new(),
             url
@@ -63,6 +61,7 @@ impl JsonRpc {
         endpoint: Endpoint,
         request: &DwnRequest
     ) -> Result<DwnResponse, Error> {
+        log::info!("Sending request {:?} {:?} to did: {:?}", request.action, request.r#type, endpoint.0);
         let (_, key) = self.did_resolver.resolve_dwn_keys(&endpoint.0).await?;
         let p = Packet{
             recipient: endpoint.0.clone(),

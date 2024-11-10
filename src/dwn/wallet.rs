@@ -6,6 +6,7 @@ use simple_database::database::{FiltersBuilder, Filter, IndexBuilder};
 
 use crate::dids::{Identity, DidKeyPair, Did};
 use super::structs::{AgentKey, DwnKey, Record};
+use super::json_rpc::JsonRpc;
 use super::Agent;
 
 use super::protocol::{SystemProtocols, Protocol};
@@ -19,16 +20,17 @@ pub struct Wallet {
     sig_key: DidKeyPair,
     enc_key: DwnKey,
     com_key: DwnKey,
-    router: Option<Box<dyn Router>>,
-    did_resolver: Option<Box<dyn DidResolver>>,
+    router: Box<dyn Router>,
+    did_resolver: Box<dyn DidResolver>,
 }
 
 impl Wallet {
     pub fn new(
         identity: Identity,
+        did_resolver: Box<dyn DidResolver>,
         router: Option<Box<dyn Router>>,
-        did_resolver: Option<Box<dyn DidResolver>>,
     ) -> Self {
+        let router = router.unwrap_or(Box::new(JsonRpc::new(did_resolver.clone())));
         Wallet{
             _did_key: identity.did_key,
             sig_key: identity.sig_key,
@@ -45,7 +47,7 @@ impl Wallet {
         let protocol_hash = protocol.hash();
         let root_agent_key = AgentKey::new(self.sig_key.clone(), self.enc_key.clone(), self.com_key.clone(), protocol_hash);
         let pf = SystemProtocols::protocol_folder(protocol_hash);
-        let agent = Agent::new(root_agent_key, vec![pf.clone()], self.router.clone(), self.did_resolver.clone());
+        let agent = Agent::new(root_agent_key, vec![pf.clone()], self.did_resolver.clone(), Some(self.router.clone()));
 
         let record = Record::new(Some(protocol_hash), &pf, Vec::new());
         agent.create(&[], None, record, None).await?;

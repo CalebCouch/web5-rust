@@ -34,7 +34,6 @@ clone_trait_object!(DidDocument);
 
 #[async_trait::async_trait]
 pub trait DidResolver: DynClone + std::fmt::Debug + Sync + Send {
-    fn new() -> Self where Self: Sized;
     async fn resolve(&self, did: &Did) -> Result<Option<Box<dyn DidDocument>>, Error>;
 
     //Provided

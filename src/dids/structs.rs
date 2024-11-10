@@ -8,10 +8,12 @@ use std::collections::BTreeMap;
 use schemars::schema::Schema;
 use serde::{Deserialize, Serialize};
 use schemars::gen::SchemaGenerator;
-use simple_database::Indexable;
+use simple_database::{KeyValueStore, Indexable};
 use schemars::JsonSchema;
 use regex::Regex;
 use url::Url;
+use chrono::{DateTime, Utc};
+use std::path::PathBuf;
 
 pub type Endpoint = (Did, Url);
 
@@ -287,17 +289,43 @@ impl DidKeyPair {
 }
 
 #[derive(Debug, Clone)]
-pub struct DefaultDidResolver {}
+pub struct DefaultDidResolver {
+    cache: Box<dyn KeyValueStore>
+}
+
+impl DefaultDidResolver {
+    pub async fn new<KVS: KeyValueStore + 'static>(path: Option<PathBuf>) -> Result<Self, Error> {
+        let path = path.unwrap_or(PathBuf::from("DefaultDidResolver"));
+        Ok(DefaultDidResolver{
+            cache: Box::new(KVS::new(path).await?)
+        })
+    }
+}
 
 #[async_trait::async_trait]
 impl DidResolver for DefaultDidResolver {
-    fn new() -> Self {DefaultDidResolver{}}
     async fn resolve(&self, did: &Did) -> Result<Option<Box<dyn DidDocument>>, Error> {
-        Ok(match did.method {
+        let bytes = serde_json::to_vec(did)?;
+        if let Some((time, doc)) = self.cache.get(&bytes).await?.as_ref().map(|b|
+            serde_json::from_slice::<(DateTime<Utc>, Box<dyn DidDocument>)>(b)
+        ).transpose()? {
+            if Utc::now().timestamp() > time.timestamp()+900 {
+                self.cache.delete(&bytes).await?;
+            } else {
+                return Ok(Some(doc));
+            }
+        }
+        log::info!("Resolving did: {}", did);
+        let doc = match did.method {
             DidMethod::DHT => DhtDocument::resolve(&did.id).await?.map(|m|
                 Box::new(m) as Box<dyn DidDocument>
             )
-        })
+        };
+
+        if let Some(doc) = doc.clone() {
+            self.cache.set(&bytes, &serde_json::to_vec(&(Utc::now(), doc))?).await?;
+        }
+        Ok(doc)
     }
 }
 

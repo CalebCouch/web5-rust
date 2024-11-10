@@ -48,8 +48,9 @@ bitcoin_hashes = {version = "0.14.0", features = ["schemars"]}
 bitcoin = {version = "0.32.2", features = ["serde"]}
 uuid = {version="1.10.0", features = ["v4", "serde"]}
 either = {version="1.13.0", features = ["serde"]}
-simple-database = {version="1.1.5"} #{path="../simple-database"}
+simple-database = {version="1.1.6"} #{path="../simple-database"}
 simple-crypto = {version="1.0.2"} #{path="../simple-crypto"}
+log = "0.4.22"
 
 [features]
 leveldb = ["dep:leveldb"]
