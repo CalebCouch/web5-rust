@@ -16,6 +16,7 @@ use super::{PrivateClient, PublicClient, DMClient};
 
 use either::Either;
 
+#[derive(Clone)]
 pub struct Agent {
     tenant: Did,
     agent_key: AgentKey,

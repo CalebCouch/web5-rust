@@ -46,16 +46,8 @@ impl RequestHandler {
         let responses = self.broadcast_request(request, dids).await?;
         match &request.action {
             Action::Create => {
-                if request.r#type == Type::DM {
-                    for res in responses {
-                        res.handle(false)?;
-                    }
-                } else {
-                    for res in responses {
-                        if res.status.code != 409 {//Assume conflicts are the record already being created
-                            res.handle(false)?;
-                        }
-                    }
+                for res in responses {
+                    res.handle(false)?;
                 }
             },
             Action::Read => {

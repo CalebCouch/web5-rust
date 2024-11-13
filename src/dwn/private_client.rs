@@ -190,7 +190,7 @@ impl PrivateClient {
             index += 1;
         }
 
-        Ok((results, end.unwrap_or_else(|| index-10)))
+        Ok((results, end.unwrap_or(index)))
     }
 
     async fn fetch(

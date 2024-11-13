@@ -47,6 +47,8 @@ impl PublicClient {
         index: Index,
         dids: &[&Did],
     ) -> Result<(), Error> {
+        let protocol = self.protocol_fetcher.get(&record.protocol)?;
+        record.validate(protocol)?;
         let request: PublicCreateRequest = PublicRecord::new(self.signer.clone(), record, index)?;
         let request = DwnRequest::new(Type::Public, Action::Create, serde_json::to_vec(&request)?);
         self.router.handle_request(&request, dids).await?;
