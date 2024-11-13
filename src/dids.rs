@@ -4,14 +4,15 @@ pub use traits::{DidResolver, DidDocument};
 mod structs;
 pub use structs::{
     DefaultDidResolver,
+    DidKeyPurpose,
     DidService,
     DidKeyPair,
     DidKeyUri,
     DidMethod,
     Endpoint,
-    Identity,
     DidType,
     DidUri,
+    DidKey,
     Did
 };
 pub mod signing;

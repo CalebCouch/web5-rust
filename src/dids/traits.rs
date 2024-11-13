@@ -43,24 +43,22 @@ pub trait DidResolver: DynClone + std::fmt::Debug + Sync + Send {
         ))
     }
     async fn resolve_dwn_keys(&self, did: &Did) -> Result<(PublicKey, PublicKey), Error> {
-        let error = |r: &str| Error::not_found("DidResolver.resolve_dwn_key", r);
-        let doc = self.resolve(did).await?.ok_or(error("Could not resolve Did"))?;
-        let sig = doc.get_key("sig").cloned().ok_or(error("Could not get key by ID"))?.public_key;
-        let com = doc.get_key("com").cloned().ok_or(error("Could not get key by ID"))?.public_key;
+        let doc = self.resolve(did).await?.ok_or(Error::not_found("DID Document"))?;
+        let sig = doc.get_key("sig").cloned().ok_or(Error::not_found("Key with ID sig"))?.public_key;
+        let com = doc.get_key("com").cloned().ok_or(Error::not_found("Key with ID com"))?.public_key;
         Ok((sig, com))
     }
 
-    async fn get_endpoints(&self, dids: &[&Did]) -> Result<Vec<Endpoint>, Error> {
-        let error = |r: &str| Error::not_found("DidResolver.get_endpoints", r);
+    async fn get_endpoints(&self, dids: &[Did]) -> Result<Vec<Endpoint>, Error> {
         let mut result = Vec::new();
         for did in dids {
-            let doc = self.resolve(did).await?.ok_or(error("Could not resolve did"))?;
-            let service = &doc.get_service("dwn").ok_or(error("Could not find dwn service"))?;
+            let doc = self.resolve(did).await?.ok_or(Error::not_found("DID Document"))?;
+            let service = &doc.get_service("dwn").ok_or(Error::not_found("DWN Service"))?;
             for s in &service.service_endpoints {
                 if let Ok(did) = Did::from_str(s) {
-                    result.append(&mut Box::pin(self.get_endpoints(&[&did])).await?);
+                    result.append(&mut Box::pin(self.get_endpoints(&[did])).await?);
                 } else if let Ok(url) = Url::from_str(s) {
-                    result.push(((*did).clone(), url));
+                    result.push(Endpoint((*did).clone(), url));
                 }
             }
         }

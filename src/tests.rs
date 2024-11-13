@@ -1,39 +1,46 @@
+//  use crate::error::Error;
+
+//  #[tokio::test]
+//  async fn group_messaging() -> Result<(), Error> {
+//      let err: Error = hex::decode("abcfrgb").err().unwrap().into();
+//      let err: Error = Error::custom("Hello");
+//      println!("err: {:#?}", err);
+//      assert!(false);
+//      Ok(())
+//  }
+use snafu::ErrorCompat;
+
 use crate::error::Error;
 
-use simple_database::{KeyValueStore, MemoryStore};
-use simple_database::database::{Filters, Filter, FiltersBuilder, SortOptions};
+use simple_database::MemoryStore;
+use simple_database::database::{Filter, Filters};
 
-use simple_crypto::{SecretKey, PublicKey, Hashable, Hash};
-use crate::ed25519;
+use simple_crypto::Hashable;
 
-use crate::dids::traits::{DidResolver, DidDocument};
-use crate::dids::structs::{
-    Identity,
-    DidKeyPurpose,
-    DidKeyPair,
-    DidService,
-    DidMethod,
-    DidKey,
-    Did,
-};
+use crate::dids::{DidResolver, DidDocument};
+use crate::dids::Did;
 use crate::dids::DhtDocument;
 
-use crate::dwn::structs::{Packet, Action, Record, DwnKey};
-use crate::dwn::permission::{ChannelPermissionOptions, PermissionOptions};
-use crate::dwn::protocol::{ChannelProtocol, Protocol};
-use crate::dwn::json_rpc::JsonRpc;
-use crate::dwn::{Server, Agent, Wallet};
+use crate::dwn::json_rpc::{JsonRpcClient, JsonRpcServer};
+use crate::dwn::traits::Server;
+use crate::dwn::structs::PublicRecord;
+use crate::dwn::{Dwn, DwnIdentity};
+
+use crate::agent::{Wallet, Agent, Identity};
+use crate::agent::structs::{RecordPath, Record};
+use crate::agent::permission::{ChannelPermissionOptions, PermissionOptions};
+use crate::agent::protocol::{ChannelProtocol, Protocol};
 
 use crate::common::Schemas;
 
+
 use std::path::PathBuf;
 use std::collections::BTreeMap;
-use std::str::FromStr;
 
-use schemars::{schema_for, JsonSchema};
-use serde::{Serialize, Deserialize};
-use either::Either;
-use url::Url;
+use uuid::Uuid;
+
+use crate::agent::scripts::*;
+
 
 pub type Docs = BTreeMap<Did, Box<dyn DidDocument>>;
 
@@ -43,6 +50,7 @@ pub struct MemoryDidResolver {
 }
 
 impl MemoryDidResolver {
+    fn new() -> Self {MemoryDidResolver{docs: Docs::default()}}
     pub fn store(&mut self, doc: Box<dyn DidDocument>) {
         self.docs.insert(doc.did(), doc);
     }
@@ -50,7 +58,6 @@ impl MemoryDidResolver {
 
 #[async_trait::async_trait]
 impl DidResolver for MemoryDidResolver {
-    fn new() -> Self where Self: Sized {MemoryDidResolver{docs: Docs::default()}}
     async fn resolve(&self, did: &Did) -> Result<Option<Box<dyn DidDocument>>, Error> {
         Ok(self.docs.get(did).cloned())
     }
@@ -59,176 +66,173 @@ impl DidResolver for MemoryDidResolver {
 impl std::fmt::Debug for MemoryDidResolver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MemoryDidResolver")
-        .field("dids", &self.docs.iter().map(|(did, doc)| did.to_string()).collect::<Vec<String>>())
+        .field("dids", &self.docs.keys().map(|did| did.to_string()).collect::<Vec<String>>())
         .finish()
     }
 }
 
-fn get_user(servers: Vec<Did>) -> Result<(DhtDocument, Identity), Error> {
-    DhtDocument::default(servers.iter().map(|d| d.to_string()).collect())
+fn get_user(servers: Vec<Did>) -> Result<(Identity, DhtDocument), Error> {
+    Identity::new(servers.iter().map(|d| d.to_string()).collect())
 }
 
-fn get_server(ports: Vec<u32>) -> Result<(DhtDocument, Identity), Error> {
-    DhtDocument::default(ports.iter().map(|p| format!("http://localhost:{}", p)).collect())
+fn get_server(ports: Vec<u32>) -> Result<(DwnIdentity, DhtDocument), Error> {
+    DwnIdentity::new(ports.iter().map(|p| format!("http://localhost:{}", p)).collect())
 }
+
+async fn run_test() -> Result<(), Error> {
+    let mut did_resolver = MemoryDidResolver::new();
+
+    let ard_port = 3000;
+    let (ard_id, ard_doc) = get_server(vec![ard_port])?;
+    let ard_did = ard_doc.did();
+    did_resolver.store(Box::new(ard_doc.clone()));
+
+    let brd_port = 3001;
+    let (brd_id, brd_doc) = get_server(vec![brd_port])?;
+    let brd_did = brd_doc.did();
+    did_resolver.store(Box::new(brd_doc.clone()));
+
+    let crd_port = 3002;
+    let (crd_id, crd_doc) = get_server(vec![crd_port])?;
+    let crd_did = crd_doc.did();
+    did_resolver.store(Box::new(crd_doc.clone()));
+
+
+    let (a_id, a_doc) = get_user(vec![ard_did.clone()])?;
+    let a_did = a_doc.did();
+    did_resolver.store(Box::new(a_doc.clone()));
+
+    let (b_id, b_doc) = get_user(vec![brd_did.clone()])?;
+    let b_did = b_doc.did();
+    did_resolver.store(Box::new(b_doc.clone()));
+
+    let (c_id, c_doc) = get_user(vec![crd_did.clone()])?;
+    let c_did = c_doc.did();
+    did_resolver.store(Box::new(c_doc.clone()));
+
+    let did_resolver: Box<dyn DidResolver> = Box::new(did_resolver.clone());
+
+
+    //RemoteDwns
+    let ard = Dwn::new::<MemoryStore>(
+        ard_id, Some(PathBuf::from("servera")), Some(did_resolver.clone())
+    ).await?;
+    let ard = tokio::spawn(JsonRpcServer{}.start_server(ard, ard_port).await?);
+
+    let brd = Dwn::new::<MemoryStore>(
+        brd_id, Some(PathBuf::from("serverb")), Some(did_resolver.clone())
+    ).await?;
+    let brd = tokio::spawn(JsonRpcServer{}.start_server(brd, brd_port).await?);
+
+    let crd = Dwn::new::<MemoryStore>(
+        crd_id, Some(PathBuf::from("serverc")), Some(did_resolver.clone())
+    ).await?;
+    let crd = tokio::spawn(JsonRpcServer{}.start_server(crd, crd_port).await?);
+
+
+    let messages_protocol = Protocol::new(
+        "Message",
+        true,
+        PermissionOptions::new(true, true, false, None),
+        Some(serde_json::to_string(&Schemas::any()).unwrap()),
+        None
+    )?;
+    println!("messages_protocol: {}", messages_protocol.hash());
+
+    let rooms_protocol = Protocol::new(
+        "Room",
+        false,
+        PermissionOptions::new(true, true, false, Some(
+            ChannelPermissionOptions::new(true, true)
+        )),
+        Some(serde_json::to_string(&Schemas::any()).unwrap()),
+        Some(ChannelProtocol::new(
+            Some(vec![&messages_protocol])
+        ))
+    )?;
+    println!("room_protocol: {}", rooms_protocol.hash());
+
+    let protocols = vec![rooms_protocol.clone(), messages_protocol.clone()];
+
+    //Wallet
+  //let a_wallet = Wallet::new(a_id, Box::new(did_resolver.clone()), None);
+    //let b_wallet = Wallet::new(b_id);//, Box::new(did_resolver.clone()), None);
+    let a_wallet = Wallet::new(a_id);
+
+    //Agent
+    let alice_agent = Agent::new(
+        a_wallet.root(),
+        protocols.clone(),
+        &*did_resolver,
+        Box::new(JsonRpcClient{})
+    );
+
+    let mut mem = alice_agent.new_compiler_memory();
+
+    let mut compiler = alice_agent.new_compiler(mem);
+
+    let record = PublicRecord::new(None, rooms_protocol.uuid(), b"\"HELLOE\"", None)?;
+    let id = record.uuid;
+    compiler.add_command(
+        CreatePublic::new(record, None),
+        Some(vec![a_did.clone()])
+    ).await?;
+
+//  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"HELLOE\"");
+//  compiler.add_command(
+//      CreatePrivate::new(record, None),
+//      Some(vec![a_did.clone()])
+//  ).await?;
+
+
+    let (res, mem) = compiler.compile().await;
+    println!("R: {:#?}", res);
+  //let mut compiler = alice_agent.new_compiler(mem);
+
+  //let record = PublicRecord::new(Some(id), rooms_protocol.uuid(), b"\"H\"", None)?;
+  //compiler.add_command(
+  //    UpdatePublic::new(record, None),
+  //    Some(vec![a_did.clone()])
+  //).await?;
+
+  //let (res, mem) = compiler.compile().await;
+  //println!("R: {:#?}", res);
+  //let mut compiler = alice_agent.new_compiler(mem);
+
+  //let filters = Filters::new(vec![
+  //    ("signer", Filter::equal(a_did.to_string()))
+  //]);
+
+  //compiler.add_command(
+  //    ReadPublic::new(filters, None),
+  //    Some(vec![a_did.clone()])
+  //).await?;
+
+  //let (res, mem) = compiler.compile().await;
+  //println!("R: {:#?}", res);
+  //let mut compiler = alice_agent.new_compiler(mem);
+
+  //compiler.add_command(
+  //    DeletePublic::new(id, None),
+  //    Some(vec![a_did.clone()])
+  //).await?;
+
+  //let (res, mem) = compiler.compile().await;
+  //println!("R: {:#?}", res);
+
+
+    println!("ARD: {}", JsonRpcClient::client_debug("http://localhost:3000").await);
+    println!("BRD: {}", JsonRpcClient::client_debug("http://localhost:3001").await);
+    assert!(false);
+    Ok(())
+}
+
 
 #[tokio::test]
 async fn group_messaging() {
-    let result: Result<(), Error> = async {
-        let mut did_resolver = MemoryDidResolver::new();
-
-        //RemoteDwnInfo
-        let ard_port = 3000;
-        let (ard_doc, ard_id) = get_server(vec![ard_port])?;
-        let ard_did= ard_id.sig_key.public.did.clone();
-        did_resolver.store(Box::new(ard_doc.clone()));
-        let brd_port = 3001;
-        let (brd_doc, brd_id) = get_server(vec![brd_port])?;
-        let brd_did = brd_id.sig_key.public.did.clone();
-        did_resolver.store(Box::new(brd_doc.clone()));
-
-        //Ids
-        let (a_doc, a_id) = get_user(vec![ard_did.clone()])?;
-        let a_did = a_id.sig_key.public.did.clone();
-        did_resolver.store(Box::new(a_doc.clone()));
-        let (b_doc, b_id) = get_user(vec![brd_did.clone()])?;
-        let b_did = b_id.sig_key.public.did.clone();
-        did_resolver.store(Box::new(b_doc.clone()));
-
-        //Dids
-
-        //RemoteDwns
-        let mut ard = Server::new::<MemoryStore>(
-            ard_did.clone(), ard_id.com_key, Some(PathBuf::from("server1")), None, Some(Box::new(did_resolver.clone()))
-        )?;
-        ard.start_server(ard_port).await?;
-
-        let mut brd = Server::new::<MemoryStore>(
-            brd_did.clone(), brd_id.com_key, Some(PathBuf::from("server2")), None, Some(Box::new(did_resolver.clone()))
-        )?;
-        brd.start_server(brd_port).await?;
-
-        //Protocols
-        let messages_protocol = Protocol::new(
-            "Message",
-            true,
-            PermissionOptions::new(true, true, false, None),
-            Some(serde_json::to_string(&Schemas::any()).unwrap()),
-            None
-        )?;
-        println!("messages_protocol: {}", messages_protocol.hash());
-
-        let rooms_protocol = Protocol::new(
-            "Room",
-            false,
-            PermissionOptions::new(true, true, false, Some(
-                ChannelPermissionOptions::new(true, true, true)
-            )),
-            Some(serde_json::to_string(&Schemas::any()).unwrap()),
-            Some(ChannelProtocol::new(
-                Some(vec![messages_protocol.hash()])
-            ))
-        )?;
-        println!("room_protocol: {}", rooms_protocol.hash());
-
-        let mut protocols = BTreeMap::default();
-        let pf = Protocol::protocol_folder(&rooms_protocol.hash());
-        protocols.insert(pf.hash(), pf);
-        protocols.insert(rooms_protocol.hash(), rooms_protocol.clone());
-        protocols.insert(messages_protocol.hash(), messages_protocol.clone());
-
-        //Wallet
-        let did_resolver: Option<Box<dyn DidResolver>> = Some(Box::new(did_resolver.clone()));
-        let a_wallet = Wallet::new(
-            a_id,
-            Some(Box::new(JsonRpc::new(did_resolver.clone()))),
-            did_resolver.clone(),
-        );
-
-        let b_wallet = Wallet::new(
-            b_id,
-            Some(Box::new(JsonRpc::new(did_resolver.clone()))),
-            did_resolver.clone(),
-        );
-
-        //Agent
-        let mut alice_agent = Agent::new(
-            a_wallet.get_agent_key(&rooms_protocol.hash()).await?,
-            protocols.clone(),
-            Some(Box::new(JsonRpc::new(did_resolver.clone()))),
-            did_resolver.clone(),
-        );
-
-        let mut bob_agent = Agent::new(
-            b_wallet.get_agent_key(&rooms_protocol.hash()).await?,
-            protocols.clone(),
-            Some(Box::new(JsonRpc::new(did_resolver.clone()))),
-            did_resolver.clone(),
-        );
-
-
-        let record = Record::new(None, rooms_protocol.hash(), serde_json::to_vec("HELLOWORLD")?);
-        let record_id = record.record_id;
-        alice_agent.public_create(record, BTreeMap::default(), &[&a_did]).await?;
-
-        let filters = FiltersBuilder::build(vec![
-            ("primary_key", Filter::equal(record_id.to_vec()))
-        ]);
-        println!("{:#?}", alice_agent.public_read(filters.clone(), None, &[&a_did]).await?);
-
-        let record = Record::new(Some(record_id), rooms_protocol.hash(), serde_json::to_vec("H")?);
-        alice_agent.public_update(record, BTreeMap::default(), &[&a_did]).await?;
-        println!("{:#?}", alice_agent.public_read(filters.clone(), None, &[&a_did]).await?);
-
-        alice_agent.public_delete(record_id, &[&a_did]).await?;
-        println!("{:#?}", alice_agent.public_read(filters, None, &[&a_did]).await?);
-
-
-
-
-        let record = Record::new(None, rooms_protocol.hash(), serde_json::to_vec("HELLOWORLD")?);
-        let root_path = vec![rooms_protocol.hash()];
-        let room_path = vec![rooms_protocol.hash(), record.record_id];
-        println!("ALICE CREATE");
-        alice_agent.create(
-            &root_path,
-            Some(&PermissionOptions::new(true, true, false, Some(
-                ChannelPermissionOptions::new(true, true, true)
-            ))),
-            record,
-            &[&a_did, &b_did]
-        ).await;
-
-        println!("ALICE READ");
-
-        println!("record: {:#?}", alice_agent.read(&root_path, None, &[&a_did]).await?.is_some());
-        println!("record: {:#?}", alice_agent.read(&root_path, Some((0, None)), &[&a_did]).await?.is_some());
-        println!("record: {:#?}", alice_agent.read(&room_path, None, &[&a_did]).await?.is_some());
-
-        println!("ALICE SHARE");
-
-        alice_agent.share(&room_path, &PermissionOptions::new(true, true, false, Some(
-            ChannelPermissionOptions::new(true, true, true)
-        )), &b_did).await?;
-
-        println!("BOB SCAN");
-
-        bob_agent.scan().await?;
-
-        println!("BOB READ");
-
-        println!("record: {:#?}", bob_agent.read(&root_path, Some((0, None)), &[&b_did]).await?.is_some());
-
-        println!("record: {:#?}", bob_agent.read(&room_path, None, &[&b_did]).await?.is_some());
-
-
-        println!("ARD: {}", JsonRpc::new(did_resolver.clone()).client_debug("http://localhost:3000").await?);
-        println!("BRD: {}", JsonRpc::new(did_resolver.clone()).client_debug("http://localhost:3001").await?);
+    let result: Result<(), Error> = run_test().await;
+    if let Err(err) = result {
+        println!("{:#?}", err);
         assert!(false);
-        Ok(())
-    }.await;
-    if result.is_err() {
-        println!("{:#?}", result);
     }
-    assert!(result.is_ok());
 }

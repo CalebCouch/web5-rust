@@ -9,22 +9,24 @@ use super::permission::{
 use crate::common::Schemas;
 use chrono::{DateTime, Utc};
 
-use simple_crypto::{PublicKey, Hashable, Hash};
-
-use std::collections::BTreeMap;
+use simple_crypto::{PublicKey, Hashable};
 
 use simple_database::Indexable;
 
 use schemars::{JsonSchema, schema_for};
 use serde::{Serialize, Deserialize};
+use uuid::Uuid;
+
+
+use jsonschema::JSONSchema;
 
 #[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChannelProtocol {
-    pub child_protocols: Option<Vec<Hash>>, //None for any child empty for no children
+    pub child_protocols: Option<Vec<Uuid>>, //None for any child empty for no children
 }
 impl ChannelProtocol {
     pub fn new(child_protocols: Option<Vec<&Protocol>>) -> Self {
-        ChannelProtocol{child_protocols: child_protocols.map(|cp| cp.into_iter().map(|p| p.hash()).collect())}
+        ChannelProtocol{child_protocols: child_protocols.map(|cp| cp.into_iter().map(|p| p.uuid()).collect())}
     }
 }
 
@@ -36,12 +38,10 @@ pub struct Protocol {
     pub schema: Option<String>,
     pub channel: Option<ChannelProtocol>
 }
-
 impl Hashable for Protocol {}
 impl Indexable for Protocol {
     fn primary_key(&self) -> Vec<u8> {self.hash_bytes()}
 }
-
 impl Protocol {
     pub fn new(
         name: &str,
@@ -55,75 +55,123 @@ impl Protocol {
         Ok(protocol)
     }
 
-    pub fn is_valid_child(&self, child_protocol: &Hash) -> Result<(), Error> {
-        let error = |r: &str| Error::bad_request("Protocol.validate_child_protocol", r);
+    pub fn uuid(&self) -> Uuid {
+        Uuid::new_v5(&Uuid::NAMESPACE_OID, &self.hash_bytes())
+    }
+
+    pub fn trim_permission(&self, mut permission: PermissionSet) -> PermissionSet {
+        if !self.delete {permission.delete = None;}
+        if self.channel.is_none() {permission.channel = None;}
+        permission
+    }
+
+    pub fn subset_permission(
+        &self, permission: PermissionSet, permission_options: Option<&PermissionOptions>
+    ) -> Result<PermissionSet, Error> {
+        let options = permission_options.unwrap_or(&self.permissions);
+        let perms = self.trim_permission(permission).subset(options)?;
+        self.validate_permission(&perms)?;
+        Ok(perms)
+    }
+
+    pub fn validate_child(&self, child_protocol: &Uuid) -> Result<(), Error> {
         if let Some(channel) = &self.channel {
             if let Some(cps) = &channel.child_protocols {
                 if !cps.contains(child_protocol) {
-                    return Err(error("ChildProtocol not supported by channel"));
+                    return Err(Error::validation("Invalid Child Protocol"));
                 }
             }
             Ok(())
-        } else {Err(error("Protocol Has No Channel"))}
+        } else {Err(Error::validation("No Channel For Protocol"))}
     }
 
     fn validate(&self) -> Result<(), Error> {
-        let error = |r: &str| Error::bad_request("Protocol.validate_self", r);
         if self.channel.is_some() != self.permissions.channel.is_some() {
-            return Err(error("Channel permission present with out channel protocol"));
+            return Err(Error::validation("Channel Permission Without Channel Protocol"));
         }
         if !self.delete && self.permissions.can_delete {
-            return Err(error("Delete Permission Required while deletese are disabled"));
+            return Err(Error::validation("Deletes Permission Without Deletes Enabled"));
         }
+        Ok(())
+    }
+
+    pub fn validate_payload(&self, payload: &[u8]) -> Result<(), Error> {
+        if let Some(schema) = self.schema.as_ref() {
+            JSONSchema::compile(&serde_json::from_str(schema)?)
+            .map_err(|_| Error::validation("Invalid Schema"))?
+            .validate(&serde_json::from_slice(payload)?)
+            .map_err(|_| Error::validation("Invalid Payload"))
+        } else if !payload.is_empty() {
+            Err(Error::validation("Invalid Payload"))
+        } else {Ok(())}
+    }
+
+    pub fn validate_permission(&self, perms: &PermissionSet) -> Result<(), Error> {
+        let trimmed = self.trim_permission(perms.clone());
+        if trimmed != *perms {return Err(Error::validation("Protocol Restrictions Mismatch"));}
+        trimmed.subset(&self.permissions).or(Err(Error::validation("Insuffcient Permission")))?;
         Ok(())
     }
 }
 
 pub struct SystemProtocols{}
 impl SystemProtocols {
-    pub fn get_map() -> BTreeMap<Hash, Protocol> {
-        let dm = Self::dms_channel();
-        let ak = Self::agent_keys();
-        let dt = Self::date_time();
-        let us = Self::usize();
-        let ci = Self::channel_item();
-        let sp = Self::shared_pointer();
-        let pp = Self::perm_pointer();
-        let p = Self::pointer();
-        let r = Self::root();
-        BTreeMap::from([
-            (dm.hash(), dm),
-            (ak.hash(), ak),
-            (dt.hash(), dt),
-            (us.hash(), us),
-            (ci.hash(), ci),
-            (sp.hash(), sp),
-            (pp.hash(), pp),
-            (p.hash(), p),
-            (r.hash(), r),
-        ])
+    pub fn all() -> Vec<Protocol> {
+        vec![
+            Self::dms_channel(),
+            Self::agent_keys(),
+            Self::date_time(),
+            Self::usize(),
+            Self::channel_item(),
+            Self::shared_pointer(),
+            Self::perm_pointer(),
+            Self::pointer(),
+            Self::root(),
+        ]
     }
+  //pub fn get_map() -> BTreeMap<Hash, Protocol> {
+  //    let dm = Self::dms_channel();
+  //    let ak = Self::agent_keys();
+  //    let dt = Self::date_time();
+  //    let us = Self::usize();
+  //    let ci = Self::channel_item();
+  //    let sp = Self::shared_pointer();
+  //    let pp = Self::perm_pointer();
+  //    let p = Self::pointer();
+  //    let r = Self::root();
+  //    BTreeMap::from([
+  //        (dm.hash(), dm),
+  //        (ak.hash(), ak),
+  //        (dt.hash(), dt),
+  //        (us.hash(), us),
+  //        (ci.hash(), ci),
+  //        (sp.hash(), sp),
+  //        (pp.hash(), pp),
+  //        (p.hash(), p),
+  //        (r.hash(), r),
+  //    ])
+  //}
 
     pub fn root() -> Protocol {
         Protocol::new(
             "root",
             false,
             PermissionOptions::new(true, true, false, Some(
-                ChannelPermissionOptions::new(true, true, true)
+                ChannelPermissionOptions::new(true, true)
             )),
             None,
             Some(ChannelProtocol::new(None))
         ).unwrap()
     }
 
-    pub fn protocol_folder(protocol: Hash) -> Protocol {
+    pub fn protocol_folder(protocol: Uuid) -> Protocol {
         Protocol::new(
             &format!("protocol_folder: {}", hex::encode(protocol.as_bytes())),
             false,
             PermissionOptions::new(false, false, false, Some(
-                ChannelPermissionOptions::new(false, false, false)
+                ChannelPermissionOptions::new(false, false)
             )),
-            None,
+            None,//Some(serde_json::to_string(&schema_for!(Protocol)).unwrap()),
             Some(ChannelProtocol{child_protocols: Some(vec![protocol])})
         ).unwrap()
     }
@@ -133,7 +181,7 @@ impl SystemProtocols {
             "dms_channel",
             true,
             PermissionOptions::new(true, true, true, Some(
-                ChannelPermissionOptions::new(true, true, true)
+                ChannelPermissionOptions::new(true, true)
             )),
             None,
             //Some(ChannelProtocol::new(Some(vec![Self::pointer().hash()])))

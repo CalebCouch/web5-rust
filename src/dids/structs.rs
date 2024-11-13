@@ -2,7 +2,6 @@ use super::Error;
 use super::traits::{DidResolver, DidDocument};
 use super::DhtDocument;
 use crate::common::Schemas;
-use crate::ed25519::SecretKey as EdSecretKey;
 use simple_crypto::{SecretKey, PublicKey, Hashable};
 use std::collections::BTreeMap;
 use schemars::schema::Schema;
@@ -15,7 +14,14 @@ use url::Url;
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 
-pub type Endpoint = (Did, Url);
+#[derive(Clone, Ord, PartialOrd, Eq, PartialEq)]
+pub struct Endpoint(pub Did, pub Url);
+
+impl std::fmt::Debug for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} : {}", self.0, self.1)
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[derive(serde_with::SerializeDisplay)]
@@ -329,21 +335,3 @@ impl DidResolver for DefaultDidResolver {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct Identity {
-    pub did_key: EdSecretKey,
-    pub sig_key: DidKeyPair,
-    pub enc_key: SecretKey,
-    pub com_key: SecretKey,
-}
-
-impl Identity {
-    pub fn new(
-        did_key: EdSecretKey,
-        sig_key: DidKeyPair,
-        enc_key: SecretKey,
-        com_key: SecretKey,
-    ) -> Self {
-        Identity{did_key, sig_key, enc_key, com_key}
-    }
-}

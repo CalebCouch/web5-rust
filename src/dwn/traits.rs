@@ -1,23 +1,24 @@
 use super::Error;
 
-use crate::dids::Did;
-use super::structs::DwnRequest;
-use super::Server;
 use dyn_clone::{clone_trait_object, DynClone};
 
 #[async_trait::async_trait]
-pub trait Router: DynClone + std::fmt::Debug + Sync + Send {
+pub trait Client: DynClone + std::fmt::Debug + Sync + Send {
+    async fn send_request(
+        &self,
+        body: String,
+        url: url::Url
+    ) -> Result<String, Error>;
+}
+clone_trait_object!(Client);
+
+#[async_trait::async_trait]
+pub trait Server: DynClone + std::fmt::Debug + Sync + Send {
     async fn start_server(
         &self,
-        dwn: Server,
+        dwn: super::Dwn,
         port: u32
     ) -> Result<actix_web::dev::Server, Error>;
 
-    async fn handle_request(
-        &self,
-        request: &DwnRequest,
-        dids: &[&Did]
-    ) -> Result<Vec<Vec<u8>>, Error>;
-
 }
-clone_trait_object!(Router);
+clone_trait_object!(Server);

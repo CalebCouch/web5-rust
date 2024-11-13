@@ -1,15 +1,22 @@
+mod error;
+pub use error::Error;
+
 mod common;
 mod ed25519;
 pub mod dids;
-mod dwn;
-mod error;
 
-pub use dwn::{Wallet, Agent, Server};
-pub use dwn::permission::{ChannelPermissionOptions, PermissionOptions};
-pub use dwn::protocol::{ChannelProtocol, Protocol};
-pub use dwn::structs::Record;
-pub use dwn::traits::Router;
-pub use error::Error;
+
+mod dwn;
+pub use dwn::{DwnIdentity, Dwn};
+pub use dwn::traits::{Client, Server};
+pub use dwn::router::Router;
+pub use dwn::json_rpc::{JsonRpcClient, JsonRpcServer};
+pub use dwn::structs::PublicRecord;
+
+mod agent;
+pub use agent::scripts;
+pub use agent::commands;
+pub use agent::{Agent, Wallet, Identity, AgentKey};
 
 pub extern crate simple_database;
 

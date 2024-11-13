@@ -29,7 +29,7 @@ impl PkarrRelay {
 
         let v = serde_bencode::to_bytes(&Value::Dict(map))?;
         let v = v[1..v.len()-1].to_vec();
-        if v.len() > PKARR_SIZE_LIMIT {return Err(Error::bad_request("PkarrRelay.put", "Document length exceeds limit"));}
+        if v.len() > PKARR_SIZE_LIMIT {return Err(Error::bad_request("Document length exceeds limit"));}
 
         let sig = secret_key.sign(&v).to_vec();
         let body = [sig, seq.to_be_bytes().to_vec(), dns_packet].concat();
@@ -40,7 +40,7 @@ impl PkarrRelay {
             .send().await?;
 
         if !res.status().is_success() {
-            Err(Error::err("PkarrRelay.put", &res.text().await?))
+            Err(Error::bad_response(&res.text().await?))
         } else {
             Ok(())
         }
@@ -50,7 +50,7 @@ impl PkarrRelay {
         let res = reqwest::get(url).await?;
         if !res.status().is_success() {
             if res.status() == reqwest::StatusCode::NOT_FOUND {return Ok(None);}
-            Err(Error::err("PkarrRelay.get", &res.text().await?))
+            Err(Error::bad_response(&res.text().await?))
         } else {
             Ok(Some(res.bytes().await?.to_vec()))
         }

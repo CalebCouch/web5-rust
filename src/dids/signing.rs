@@ -44,9 +44,8 @@ impl Signature {
     }
 
     pub async fn verify(&self, did_resolver: &dyn DidResolver, verifier: Option<&Verifier>, payload: &[u8]) -> Result<Verifier, Error> {
-        let ec = "Signature.verify";
         let verifier = verifier.unwrap_or(&self.signer);
-        if *verifier != self.signer {return Err(Error::auth_failed(ec, "Verifier did not match Signer"));}
+        if *verifier != self.signer {return Err(Error::invalid_auth("Verifier did not match Signer"));}
         let dk = match &self.signer {
             Either::Left(did) => {
                 did_resolver.resolve_dwn_keys(did).await?.0

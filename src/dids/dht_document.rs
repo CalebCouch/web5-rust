@@ -1,12 +1,12 @@
 use super::Error;
 
-use super::structs::{DidKeyPair, DidMethod, Did, DidService, DidKey, DidType, DidKeyPurpose, Identity};
+use super::structs::{DidMethod, Did, DidService, DidKey, DidType, DidKeyPurpose};
 use super::traits::DidDocument;
 use super::pkarr::PkarrRelay;
 use super::dns_packet::DhtDns;
 
 use crate::ed25519::{SecretKey as EdSecretKey, PublicKey as EdPublicKey};
-use simple_crypto::SecretKey;
+use simple_crypto::PublicKey;
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -53,26 +53,21 @@ impl DhtDocument {
         ).await
     }
 
-    pub fn default(service_endpoints: Vec<String>) -> Result<(Self, Identity), Error> {
-        let id_sec_key = EdSecretKey::new();
-        let id_key = id_sec_key.public_key();
+    pub fn default(id: EdPublicKey, sig: PublicKey, com: PublicKey, service_endpoints: Vec<String>) -> Result<Self, Error> {
+        let did = Did::new(DidMethod::DHT, id.thumbprint());
 
-        let did = Did::new(DidMethod::DHT, id_key.thumbprint());
-
-        let sec_sig_key = SecretKey::new();
         let sig_key = DidKey::new(
             Some("sig".to_string()),
             did.clone(),
-            sec_sig_key.public_key(),
+            sig,
             vec![DidKeyPurpose::Auth, DidKeyPurpose::Asm, DidKeyPurpose::Agm],
             None
         );
 
-        let sec_com_key = SecretKey::new();
         let com_key = DidKey::new(
             Some("com".to_string()),
             did.clone(),
-            sec_com_key.public_key(),
+            com,
             vec![DidKeyPurpose::Auth, DidKeyPurpose::Asm, DidKeyPurpose::Agm],
             None
         );
@@ -84,9 +79,7 @@ impl DhtDocument {
         let mut services = BTreeMap::default();
         services.insert("dwn".to_string(), DidService::new_dwn(service_endpoints));
 
-        let doc = DhtDocument::new(id_key, Vec::new(), Vec::new(), services, keys, Vec::new());
-        let identity = Identity::new(id_sec_key, DidKeyPair::new(sec_sig_key, sig_key)?, SecretKey::new(), sec_com_key);
-        Ok((doc, identity))
+        Ok(DhtDocument::new(id, Vec::new(), Vec::new(), services, keys, Vec::new()))
     }
 }
 
