@@ -175,14 +175,12 @@ impl PrivateClient {
 
         let mut results = Vec::new();
         let mut index = start;
-        let mut empties = 0;
         loop {
             if let Some(end) = end {if index > end {break;}}
-            if empties >= 10 {break;}
 
             item_perms.discover = discover_child.derive_usize(index)?;
             let (perm_item, exists) = self.resolve_pointers(&item_perms, dids).await?;
-            if exists {empties = 0} else {empties += 1}
+            if !exists {break;}
 
             if let Some(perm_item) = perm_item {
                 if perm_item.is_valid_child(parent_protocol).is_ok() {
@@ -258,13 +256,7 @@ impl PrivateClient {
         let mut index = start;
         loop {
             if !self.exists(&discover_child.derive_usize(index)?, dids).await? {
-                for i in 1..11 {
-                    if self.exists(&discover_child.derive_usize(index+i)?, dids).await? {
-                        index += i;
-                        break;
-                    }
-                    if i == 10 {return Ok(index);}
-                }
+                return Ok(index);
             }
             index += 1;
         }
