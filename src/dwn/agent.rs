@@ -2,11 +2,12 @@ use super::Error;
 use simple_crypto::{PublicKey, Hashable, Hash};
 use super::structs::{PermissionedRecord, ProtocolFetcher};
 use simple_database::database::{SortOptions, Filter, FiltersBuilder,Filters, Index};
+use simple_database::KeyValueStore;
 use super::permission::PermissionSet;
 use chrono::{DateTime, Utc};
 
 use super::json_rpc::JsonRpc;
-use crate::dids::{DidResolver, Did};
+use crate::dids::{DefaultDidResolver, DidResolver, Did};
 use crate::dids::signing::Verifier;
 use super::structs::{AgentKey, Record};
 use super::permission::PermissionOptions;
@@ -15,6 +16,7 @@ use super::traits::Router;
 use super::{PrivateClient, PublicClient, DMClient};
 
 use either::Either;
+use std::path::PathBuf;
 
 #[derive(Clone)]
 pub struct Agent {
@@ -23,28 +25,34 @@ pub struct Agent {
     private_client: PrivateClient,
     public_client: PublicClient,
     dm_client: DMClient,
+    cache: Box<dyn KeyValueStore>
 }
 
 impl Agent {
-    pub fn new(
+    pub async fn new<KVS: KeyValueStore + 'static>(
         agent_key: AgentKey,
         protocols: Vec<Protocol>,
-        did_resolver: Box<dyn DidResolver>,
+        path: Option<PathBuf>,
+        did_resolver: Option<Box<dyn DidResolver>>,
         router: Option<Box<dyn Router>>,
-    ) -> Self {
+    ) -> Result<Self, Error> {
+        let path = path.unwrap_or(PathBuf::from("Agent"));
+        let did_resolver = did_resolver.unwrap_or(Box::new(DefaultDidResolver::new::<KVS>(Some(path.join("DefaultDidResolver"))).await?));
         let router = router.unwrap_or(Box::new(JsonRpc::new(did_resolver.clone())));
         let protocol_fetcher = ProtocolFetcher::new([vec![SystemProtocols::protocol_folder(agent_key.master_protocol)], protocols].concat());
         let private_client = PrivateClient::new(router.clone(), protocol_fetcher.clone());
         let public_client = PublicClient::new(Either::Left(agent_key.sig_key.clone()), router.clone(), did_resolver.clone(), protocol_fetcher.clone());
         let dm_client = DMClient::new(agent_key.sig_key.clone(), agent_key.com_key.key.clone(), router.clone(), did_resolver.clone());
+        let cache = Box::new(KVS::new(path.join("AgentCache")).await?);
 
-        Agent{
+        Ok(Agent{
             tenant: agent_key.sig_key.public.did.clone(),
             agent_key,
             private_client,
             public_client,
             dm_client,
-        }
+            cache,
+        })
     }
 
     pub fn get_root(&self) -> &Vec<Hash> {&self.agent_key.enc_key.path}

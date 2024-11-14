@@ -3,6 +3,7 @@ use super::Error;
 use crate::ed25519::SecretKey as EdSecretKey;
 use simple_crypto::{PublicKey, Hashable};
 use simple_database::database::{FiltersBuilder, Filter, IndexBuilder};
+use simple_database::MemoryStore;
 
 use crate::dids::{Identity, DidKeyPair, Did};
 use super::structs::{AgentKey, DwnKey, Record};
@@ -47,7 +48,7 @@ impl Wallet {
         let protocol_hash = protocol.hash();
         let root_agent_key = AgentKey::new(self.sig_key.clone(), self.enc_key.clone(), self.com_key.clone(), protocol_hash);
         let pf = SystemProtocols::protocol_folder(protocol_hash);
-        let agent = Agent::new(root_agent_key, vec![pf.clone()], self.did_resolver.clone(), Some(self.router.clone()));
+        let agent = Agent::new::<MemoryStore>(root_agent_key, vec![pf.clone()], None, Some(self.did_resolver.clone()), Some(self.router.clone())).await?;
 
         if agent.read(&[protocol_hash], None, None).await?.is_none() {
             let record = Record::new(Some(protocol_hash), &pf, Vec::new());

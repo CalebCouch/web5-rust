@@ -23,7 +23,6 @@ use simple_crypto::{SecretKey, Key, Hashable, Hash};
 use crate::dids::signing::SignedObject;
 use crate::dids::Did;
 
-
 #[derive(Debug, Clone)]
 pub struct PrivateClient {
     router: Box<dyn Router>,
@@ -33,7 +32,7 @@ pub struct PrivateClient {
 impl PrivateClient {
     pub fn new(
         router: Box<dyn Router>,
-        protocol_fetcher:  ProtocolFetcher,
+        protocol_fetcher: ProtocolFetcher,
     ) -> Self {
         PrivateClient{router, protocol_fetcher}
     }
