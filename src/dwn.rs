@@ -5,14 +5,14 @@ pub mod protocol;
 pub mod structs;
 pub mod traits;
 
-pub mod private_client;
-pub use private_client::PrivateClient;
-pub mod public_client;
-pub use public_client::PublicClient;
-pub mod dm_client;
-pub use dm_client::DMClient;
-//  pub mod private_agent;
-//  pub use private_agent::PrivateAgent;
+pub mod router;
+
+mod private_client;
+use private_client::PrivateClient;
+mod public_client;
+use public_client::PublicClient;
+mod dm_client;
+use dm_client::DMClient;
 
 pub mod server;
 pub use server::Server;

@@ -17,6 +17,7 @@ use simple_database::Indexable;
 
 use schemars::{JsonSchema, schema_for};
 use serde::{Serialize, Deserialize};
+use uuid::Uuid;
 
 #[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChannelProtocol {
@@ -53,6 +54,10 @@ impl Protocol {
         let protocol = Protocol{name: name.to_string(), delete, permissions, schema, channel};
         protocol.validate()?;
         Ok(protocol)
+    }
+
+    pub fn uuid(&self) -> Uuid {
+        Uuid::new_v5(&Uuid::NAMESPACE_OID, &self.hash_bytes())
     }
 
     pub fn is_valid_child(&self, child_protocol: &Hash) -> Result<(), Error> {
@@ -123,7 +128,7 @@ impl SystemProtocols {
             PermissionOptions::new(false, false, false, Some(
                 ChannelPermissionOptions::new(false, false, false)
             )),
-            None,
+            None,//Some(serde_json::to_string(&schema_for!(Protocol)).unwrap()),
             Some(ChannelProtocol{child_protocols: Some(vec![protocol])})
         ).unwrap()
     }

@@ -1,22 +1,26 @@
 use super::Error;
-use simple_crypto::{PublicKey, Hashable, Hash};
-use super::structs::{PermissionedRecord, ProtocolFetcher};
-use simple_database::database::{SortOptions, Filter, FiltersBuilder,Filters, Index};
-use simple_database::KeyValueStore;
-use super::permission::PermissionSet;
-use chrono::{DateTime, Utc};
 
-use super::json_rpc::JsonRpc;
 use crate::dids::{DefaultDidResolver, DidResolver, Did};
 use crate::dids::signing::Verifier;
-use super::structs::{AgentKey, Record};
-use super::permission::PermissionOptions;
-use super::protocol::{SystemProtocols, Protocol};
-use super::traits::Router;
-use super::{PrivateClient, PublicClient, DMClient};
 
-use either::Either;
+use super::structs::{PermissionedRecord, ProtocolFetcher};
+use super::permission::{PermissionOptions, PermissionSet};
+use super::{PrivateClient, PublicClient, DMClient};
+use super::protocol::{SystemProtocols, Protocol};
+use super::structs::{AgentKey, Record};
+use super::router::DefaultRouter;
+use super::traits::Router;
+
 use std::path::PathBuf;
+
+use simple_crypto::{PublicKey, Hashable};
+use simple_database::database::{SortOptions, Filter, FiltersBuilder,Filters, Index};
+use simple_database::KeyValueStore;
+use chrono::{DateTime, Utc};
+use either::Either;
+use uuid::Uuid;
+
+const LAST_DM_CHECK: [u8; 13] = *b"LAST_DM_CHECK";
 
 #[derive(Clone)]
 pub struct Agent {
@@ -38,7 +42,7 @@ impl Agent {
     ) -> Result<Self, Error> {
         let path = path.unwrap_or(PathBuf::from("Agent"));
         let did_resolver = did_resolver.unwrap_or(Box::new(DefaultDidResolver::new::<KVS>(Some(path.join("DefaultDidResolver"))).await?));
-        let router = router.unwrap_or(Box::new(JsonRpc::new(did_resolver.clone())));
+        let router = router.unwrap_or(Box::new(DefaultRouter::new(did_resolver.clone(), None)));
         let protocol_fetcher = ProtocolFetcher::new([vec![SystemProtocols::protocol_folder(agent_key.master_protocol)], protocols].concat());
         let private_client = PrivateClient::new(router.clone(), protocol_fetcher.clone());
         let public_client = PublicClient::new(Either::Left(agent_key.sig_key.clone()), router.clone(), did_resolver.clone(), protocol_fetcher.clone());
@@ -55,17 +59,17 @@ impl Agent {
         })
     }
 
-    pub fn get_root(&self) -> &Vec<Hash> {&self.agent_key.enc_key.path}
+    pub fn get_root(&self) -> &Vec<Uuid> {&self.agent_key.enc_key.path}
 
     pub fn tenant(&self) -> &Did {&self.tenant}
 
     pub async fn create(
         &self,
-        parent_path: &[Hash],
+        parent_path: &[Uuid],
         permission_options: Option<&PermissionOptions>,
         record: Record,
         dids: Option<&[&Did]>,
-    ) -> Result<Vec<Hash>, Error> {
+    ) -> Result<Vec<Uuid>, Error> {
         let default_dids = vec![self.tenant()];
         let dids = dids.unwrap_or(&default_dids);
         let error = |r: &str| Error::bad_request("Agent.create", r);
@@ -80,7 +84,7 @@ impl Agent {
 
     pub async fn read(
         &self,
-        path: &[Hash],
+        path: &[Uuid],
         index: Option<(usize, Option<usize>)>,
         dids: Option<&[&Did]>
     ) -> Result<Option<Record>, Error> {
@@ -100,7 +104,7 @@ impl Agent {
 
     pub async fn update(
         &self,
-        path: &[Hash],
+        path: &[Uuid],
         permission_options: Option<&PermissionOptions>,
         record: Record,
         dids: Option<&[&Did]>,
@@ -114,7 +118,7 @@ impl Agent {
 
     pub async fn delete(
         &self,
-        path: &[Hash],
+        path: &[Uuid],
         dids: Option<&[&Did]>,
     ) -> Result<bool, Error> {
         let default_dids = vec![self.tenant()];
@@ -127,7 +131,7 @@ impl Agent {
 
     pub async fn share(
         &self,
-        path: &[Hash],
+        path: &[Uuid],
         permission_options: &PermissionOptions,
         recipient: &Did
     ) -> Result<(), Error> {
@@ -161,7 +165,12 @@ impl Agent {
         let channels = self.private_client.read_child(&root, None, None, &dids).await?.0;
 
         for (channel, index) in channels {
-            let ldi_id = serde_json::to_vec(&format!("LAST_DM_INDEX: {} {}", serde_json::to_vec(&self.agent_key.com_key.path)?.hash(), index))?.hash();
+            let ldi_id = Uuid::new_v5(&Uuid::NAMESPACE_OID,
+                &serde_json::to_vec(&format!("LAST_DM_INDEX: {} {}",
+                    serde_json::to_vec(&self.agent_key.com_key.path)?.hash(),
+                    index
+                ))?
+            );
             let ldi_perms = PermissionSet::from_key(&self.agent_key.com_key.derive_path(&[ldi_id])?)?;
             let last_dm_index = self.private_client.read(&ldi_perms, &dids).await?.map(|record|
                 serde_json::from_slice::<usize>(&record.record.payload)
@@ -243,7 +252,7 @@ impl Agent {
 
     pub async fn public_delete(
         &self,
-        record_id: Hash,
+        record_id: Uuid,
         dids: Option<&[&Did]>
     ) -> Result<(), Error> {
         let default_dids = vec![self.tenant()];
@@ -254,12 +263,12 @@ impl Agent {
     async fn establish_direct_messages(&self, recipient: &Did) -> Result<PermissionedRecord, Error> {
         self.check_did_messages().await?;
         let dids = [recipient, self.tenant()];
-        let perms = PermissionSet::from_key(&self.agent_key.com_key.derive_path(&[recipient.hash()])?)?;
+        let recipient_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, &recipient.hash_bytes());
+        let perms = PermissionSet::from_key(&self.agent_key.com_key.derive_path(&[recipient_id])?)?;
         if let Some(perm_record) = self.private_client.read(&perms, &dids).await? {
             Ok(perm_record)
         } else {
-            let protocol = SystemProtocols::dms_channel();
-            let record = Record::new(Some(recipient.hash()), &protocol, Vec::new());
+            let record = Record::new(Some(recipient_id), &SystemProtocols::dms_channel(), Vec::new());
 
             let perm_parent = self.private_client.read(&PermissionSet::from_key(&self.agent_key.com_key)?, &dids).await?
                 .ok_or(Error::bad_request("Agent.establish_direct_messages", "Parent Not Found"))?;
@@ -276,7 +285,7 @@ impl Agent {
 
     async fn check_did_messages(&self) -> Result<(), Error> {
         let dids = [self.tenant()];
-        let ldc_id = serde_json::to_vec("LAST_DM_CHECK")?.hash();
+        let ldc_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, &LAST_DM_CHECK);
         let ldc_perms = PermissionSet::from_key(&self.agent_key.com_key.derive_path(&[ldc_id])?)?;
         let last_dm_check = self.private_client.read(&ldc_perms, &dids).await?.map(|record|
             serde_json::from_slice::<DateTime<Utc>>(&record.record.payload)
@@ -284,8 +293,9 @@ impl Agent {
 
         for (sender, permission) in self.dm_client.read(last_dm_check).await? {
             if let Some(pr) = self.private_client.read(&permission, &dids).await? {
-                let record = Record::new(Some(sender.hash()), &SystemProtocols::pointer(), serde_json::to_vec(&pr.perms)?);
-                let channel_perms = PermissionSet::from_key(&self.agent_key.com_key.derive_path(&[sender.hash()])?)?;
+                let sender_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, &sender.hash_bytes());
+                let record = Record::new(Some(sender_id), &SystemProtocols::pointer(), serde_json::to_vec(&pr.perms)?);
+                let channel_perms = PermissionSet::from_key(&self.agent_key.com_key.derive_path(&[sender_id])?)?;
 
                 let perm_parent = self.private_client.read(&PermissionSet::from_key(&self.agent_key.com_key)?, &dids).await?
                     .ok_or(Error::bad_request("Agent.check_did_messages", "Parent Not Found"))?;
@@ -302,7 +312,7 @@ impl Agent {
         Ok(())
     }
 
-    fn get_permission(&self, path: &[Hash]) -> Result<PermissionSet, Error> {
+    fn get_permission(&self, path: &[Uuid]) -> Result<PermissionSet, Error> {
         PermissionSet::from_key(&self.agent_key.enc_key.derive_path(path)?)
     }
 }

@@ -19,8 +19,8 @@ use super::structs::{
     Packet,
     Type
 };
-use super::json_rpc::JsonRpc;
-use super::traits::Router;
+use super::json_rpc::JsonRpcServer;
+use super::traits;
 
 use crate::dids::{DefaultDidResolver, DidResolver, Did};
 use crate::dids::signing::Verifier;
@@ -40,7 +40,7 @@ pub struct Server {
     pub private_database: Database,
     pub public_database: Database,
     pub dms_database: Database,
-    pub router: Box<dyn Router>,
+    pub server: Box<dyn traits::Server>,
     pub did_resolver: Box<dyn DidResolver>,
 }
 
@@ -50,41 +50,45 @@ impl Server {
         com_key: SecretKey,
         data_path: Option<PathBuf>,
         did_resolver: Option<Box<dyn DidResolver>>,
-        router: Option<Box<dyn Router>>,
+        server: Option<Box<dyn traits::Server>>,
     ) -> Result<Self, Error> {
         let data_path = data_path.unwrap_or(PathBuf::from("DWN"));
         let did_resolver = did_resolver.unwrap_or(Box::new(
             DefaultDidResolver::new::<KVS>(Some(data_path.join("DefaultDidResolver"))).await?
         ));
-        let router = router.unwrap_or(Box::new(JsonRpc::new(did_resolver.clone())));
+        let server = server.unwrap_or(Box::new(JsonRpcServer{}));
         Ok(Server{
             tenant,
             com_key,
             private_database: Database::new::<KVS>(data_path.join("DATABASE").join("PRIVATE")).await?,
             public_database: Database::new::<KVS>(data_path.join("DATABASE").join("PUBLIC")).await?,
             dms_database: Database::new::<KVS>(data_path.join("DATABASE").join("DMS")).await?,
-            router,
+            server,
             did_resolver,
         })
     }
 
     pub async fn start_server(self, port: u32) -> Result<actix_web::dev::Server, Error> {
-        let router = self.router.clone();
-        router.start_server(self, port).await
+        let server = self.server.clone();
+        server.start_server(self, port).await
     }
 
-    pub async fn process_packet(&mut self, packet: Packet) -> Result<DwnResponse, Error> {
+    pub async fn process_packet(&mut self, packet: Packet) -> DwnResponse {
         if packet.recipient == self.tenant {
-            let payload = self.com_key.decrypt(&packet.payload)?;
+            let payload = match self.com_key.decrypt(&packet.payload) {
+                Ok(res) => res,
+                Err(e) => {return Into::<DwnResponse>::into(Into::<Error>::into(e));}
+            };
+
             if let Ok(packet) = serde_json::from_slice::<Packet>(&payload) {
                 Box::pin(async move {self.process_packet(packet).await}).await
             } else if let Ok(req) = serde_json::from_slice::<DwnRequest>(&payload) {
-                Ok(match self.process_request(req).await {
+                match self.process_request(req).await {
                     Ok(res) => res,
                     Err(e) => Into::<DwnResponse>::into(e)
-                })
+                }
             } else {
-                Ok(Error::bad_request("dwn.process_packet", "packet.payload was not another packet or messages").into())
+                Error::bad_request("dwn.process_packet", "Packet Could not be proccessed").into()
             }
         } else {
             todo!()
@@ -222,6 +226,15 @@ impl Server {
                 }
             }
         }
+    }
+
+    pub async fn debug(&self) -> Result<String, Error> {
+        Ok(
+            self.tenant.to_string()+"\n"+
+            &self.private_database.debug().await?+
+            &self.public_database.debug().await?+
+            &self.dms_database.debug().await?
+        )
     }
 }
 

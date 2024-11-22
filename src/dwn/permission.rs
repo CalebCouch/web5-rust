@@ -1,12 +1,13 @@
 use super::Error;
 
-use simple_crypto::{SecretKey, Hash, Key};
+use simple_crypto::{SecretKey, Key};
 
 use super::structs::DwnKey;
 use super::protocol::Protocol;
 
 use schemars::JsonSchema;
 use serde::{Serialize, Deserialize};
+use uuid::Uuid;
 
 #[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PermissionOptions {
@@ -63,7 +64,7 @@ impl ChannelPermissionSet {
 
 #[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PermissionSet {
-    pub path: Vec<Hash>,
+    pub path: Vec<Uuid>,
     pub discover: SecretKey,
     pub create: Key,
     pub read: Key,
@@ -73,7 +74,7 @@ pub struct PermissionSet {
 
 impl PermissionSet {
     pub fn new(
-        path: Vec<Hash>,
+        path: Vec<Uuid>,
         discover: SecretKey,
         create: Key,
         read: Key,

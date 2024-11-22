@@ -16,12 +16,13 @@ use super::structs::{
 };
 
 use super::traits::Router;
-use simple_crypto::Hash;
 
 use crate::dids::signing::{SignedObject, Signer, Verifier};
 use crate::dids::{DidResolver, Did};
 
 use std::collections::BTreeSet;
+
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct PublicClient {
@@ -98,7 +99,7 @@ impl PublicClient {
 
     pub async fn delete(
         &self,
-        record_id: Hash,
+        record_id: Uuid,
         dids: &[&Did],
     ) -> Result<(), Error> {
         let request: PublicDeleteRequest = SignedObject::new(self.signer.clone(), record_id)?;

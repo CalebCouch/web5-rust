@@ -1,39 +1,28 @@
 use crate::error::Error;
 
-use simple_database::{KeyValueStore, MemoryStore};
-use simple_database::database::{Filters, Filter, FiltersBuilder, SortOptions};
+use simple_database::MemoryStore;
+use simple_database::database::{Filter, FiltersBuilder};
 
-use simple_crypto::{SecretKey, PublicKey, Hashable, Hash};
-use crate::ed25519;
+use simple_crypto::Hashable;
 
-use crate::dids::traits::{DidResolver, DidDocument};
-use crate::dids::structs::{
+use crate::dids::{DidResolver, DidDocument};
+use crate::dids::{
     Identity,
-    DidKeyPurpose,
-    DidKeyPair,
-    DidService,
-    DidMethod,
-    DidKey,
     Did,
 };
 use crate::dids::DhtDocument;
 
-use crate::dwn::structs::{Packet, Action, Record, DwnKey};
-use crate::dwn::permission::{ChannelPermissionOptions, PermissionOptions};
-use crate::dwn::protocol::{ChannelProtocol, Protocol};
-use crate::dwn::json_rpc::JsonRpc;
-use crate::dwn::{Server, Agent, Wallet};
+use crate::Record;
+use crate::{ChannelPermissionOptions, PermissionOptions};
+use crate::{ChannelProtocol, Protocol};
+use crate::{Server, Agent, Wallet};
+use crate::json_rpc::JsonRpcClient;
 
 use crate::common::Schemas;
 
 use std::path::PathBuf;
 use std::collections::BTreeMap;
-use std::str::FromStr;
 
-use schemars::{schema_for, JsonSchema};
-use serde::{Serialize, Deserialize};
-use either::Either;
-use url::Url;
 
 pub type Docs = BTreeMap<Did, Box<dyn DidDocument>>;
 
@@ -43,6 +32,7 @@ pub struct MemoryDidResolver {
 }
 
 impl MemoryDidResolver {
+    fn new() -> Self {MemoryDidResolver{docs: Docs::default()}}
     pub fn store(&mut self, doc: Box<dyn DidDocument>) {
         self.docs.insert(doc.did(), doc);
     }
@@ -50,7 +40,6 @@ impl MemoryDidResolver {
 
 #[async_trait::async_trait]
 impl DidResolver for MemoryDidResolver {
-    fn new() -> Self where Self: Sized {MemoryDidResolver{docs: Docs::default()}}
     async fn resolve(&self, did: &Did) -> Result<Option<Box<dyn DidDocument>>, Error> {
         Ok(self.docs.get(did).cloned())
     }
@@ -59,7 +48,7 @@ impl DidResolver for MemoryDidResolver {
 impl std::fmt::Debug for MemoryDidResolver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MemoryDidResolver")
-        .field("dids", &self.docs.iter().map(|(did, doc)| did.to_string()).collect::<Vec<String>>())
+        .field("dids", &self.docs.keys().map(|did| did.to_string()).collect::<Vec<String>>())
         .finish()
     }
 }
@@ -95,18 +84,18 @@ async fn group_messaging() {
         let b_did = b_id.sig_key.public.did.clone();
         did_resolver.store(Box::new(b_doc.clone()));
 
-        //Dids
+        let opt_did_resolver: Option<Box<dyn DidResolver>> = Some(Box::new(did_resolver.clone()));
 
         //RemoteDwns
-        let mut ard = Server::new::<MemoryStore>(
-            ard_did.clone(), ard_id.com_key, Some(PathBuf::from("server1")), None, Some(Box::new(did_resolver.clone()))
-        )?;
-        ard.start_server(ard_port).await?;
+        let ard = Server::new::<MemoryStore>(
+            ard_did.clone(), ard_id.com_key, Some(PathBuf::from("server1")), opt_did_resolver.clone(), None
+        ).await?;
+        let ard =  tokio::spawn(ard.start_server(ard_port).await?);
 
-        let mut brd = Server::new::<MemoryStore>(
-            brd_did.clone(), brd_id.com_key, Some(PathBuf::from("server2")), None, Some(Box::new(did_resolver.clone()))
-        )?;
-        brd.start_server(brd_port).await?;
+        let brd = Server::new::<MemoryStore>(
+            brd_did.clone(), brd_id.com_key, Some(PathBuf::from("server2")), opt_did_resolver.clone(), None
+        ).await?;
+        let brd = tokio::spawn(brd.start_server(brd_port).await?);
 
         //Protocols
         let messages_protocol = Protocol::new(
@@ -126,69 +115,54 @@ async fn group_messaging() {
             )),
             Some(serde_json::to_string(&Schemas::any()).unwrap()),
             Some(ChannelProtocol::new(
-                Some(vec![messages_protocol.hash()])
+                Some(vec![&messages_protocol])
             ))
         )?;
         println!("room_protocol: {}", rooms_protocol.hash());
 
-        let mut protocols = BTreeMap::default();
-        let pf = Protocol::protocol_folder(&rooms_protocol.hash());
-        protocols.insert(pf.hash(), pf);
-        protocols.insert(rooms_protocol.hash(), rooms_protocol.clone());
-        protocols.insert(messages_protocol.hash(), messages_protocol.clone());
+        let protocols = vec![rooms_protocol.clone(), messages_protocol.clone()];
 
         //Wallet
-        let did_resolver: Option<Box<dyn DidResolver>> = Some(Box::new(did_resolver.clone()));
-        let a_wallet = Wallet::new(
-            a_id,
-            Some(Box::new(JsonRpc::new(did_resolver.clone()))),
-            did_resolver.clone(),
-        );
-
-        let b_wallet = Wallet::new(
-            b_id,
-            Some(Box::new(JsonRpc::new(did_resolver.clone()))),
-            did_resolver.clone(),
-        );
+        let a_wallet = Wallet::new(a_id, Box::new(did_resolver.clone()), None);
+        let b_wallet = Wallet::new(b_id, Box::new(did_resolver.clone()), None);
 
         //Agent
-        let mut alice_agent = Agent::new(
-            a_wallet.get_agent_key(&rooms_protocol.hash()).await?,
+        let alice_agent = Agent::new::<MemoryStore>(
+            a_wallet.get_agent_key(&rooms_protocol).await?,
             protocols.clone(),
-            Some(Box::new(JsonRpc::new(did_resolver.clone()))),
-            did_resolver.clone(),
-        );
+            None,
+            opt_did_resolver.clone(),
+            None,
+        ).await?;
 
-        let mut bob_agent = Agent::new(
-            b_wallet.get_agent_key(&rooms_protocol.hash()).await?,
+        let bob_agent = Agent::new::<MemoryStore>(
+            b_wallet.get_agent_key(&rooms_protocol).await?,
             protocols.clone(),
-            Some(Box::new(JsonRpc::new(did_resolver.clone()))),
-            did_resolver.clone(),
-        );
+            None,
+            opt_did_resolver.clone(),
+            None,
+        ).await?;
 
 
-        let record = Record::new(None, rooms_protocol.hash(), serde_json::to_vec("HELLOWORLD")?);
+        let record = Record::new(None, &rooms_protocol, serde_json::to_vec("HELLOWORLD")?);
         let record_id = record.record_id;
-        alice_agent.public_create(record, BTreeMap::default(), &[&a_did]).await?;
+        alice_agent.public_create(record, BTreeMap::default(), None).await?;
 
         let filters = FiltersBuilder::build(vec![
-            ("primary_key", Filter::equal(record_id.to_vec()))
+            ("primary_key", Filter::equal(record_id.as_bytes().to_vec()))
         ]);
-        println!("{:#?}", alice_agent.public_read(filters.clone(), None, &[&a_did]).await?);
+        println!("{:#?}", alice_agent.public_read(filters.clone(), None, None).await?.len());
 
-        let record = Record::new(Some(record_id), rooms_protocol.hash(), serde_json::to_vec("H")?);
-        alice_agent.public_update(record, BTreeMap::default(), &[&a_did]).await?;
-        println!("{:#?}", alice_agent.public_read(filters.clone(), None, &[&a_did]).await?);
+        let record = Record::new(Some(record_id), &rooms_protocol, serde_json::to_vec("H")?);
+        alice_agent.public_update(record, BTreeMap::default(), None).await?;
+        println!("{:#?}", alice_agent.public_read(filters.clone(), None, None).await?.len());
 
-        alice_agent.public_delete(record_id, &[&a_did]).await?;
-        println!("{:#?}", alice_agent.public_read(filters, None, &[&a_did]).await?);
+        alice_agent.public_delete(record_id, None).await?;
+        println!("{:#?}", alice_agent.public_read(filters, None, None).await?.len());
 
-
-
-
-        let record = Record::new(None, rooms_protocol.hash(), serde_json::to_vec("HELLOWORLD")?);
-        let root_path = vec![rooms_protocol.hash()];
-        let room_path = vec![rooms_protocol.hash(), record.record_id];
+        let record = Record::new(None, &rooms_protocol, serde_json::to_vec("HELLOWORLD")?);
+        let root_path = vec![rooms_protocol.uuid()];
+        let room_path = vec![rooms_protocol.uuid(), record.record_id];
         println!("ALICE CREATE");
         alice_agent.create(
             &root_path,
@@ -196,14 +170,14 @@ async fn group_messaging() {
                 ChannelPermissionOptions::new(true, true, true)
             ))),
             record,
-            &[&a_did, &b_did]
-        ).await;
+            Some(&[&a_did, &b_did])
+        ).await?;
 
         println!("ALICE READ");
 
-        println!("record: {:#?}", alice_agent.read(&root_path, None, &[&a_did]).await?.is_some());
-        println!("record: {:#?}", alice_agent.read(&root_path, Some((0, None)), &[&a_did]).await?.is_some());
-        println!("record: {:#?}", alice_agent.read(&room_path, None, &[&a_did]).await?.is_some());
+        println!("record: {:#?}", alice_agent.read(&root_path, None, None).await?.is_some());
+        println!("record: {:#?}", alice_agent.read(&root_path, Some((0, None)), None).await?.is_some());
+        println!("record: {:#?}", alice_agent.read(&room_path, None, None).await?.is_some());
 
         println!("ALICE SHARE");
 
@@ -217,13 +191,13 @@ async fn group_messaging() {
 
         println!("BOB READ");
 
-        println!("record: {:#?}", bob_agent.read(&root_path, Some((0, None)), &[&b_did]).await?.is_some());
+        println!("record: {:#?}", bob_agent.read(&root_path, Some((0, None)), None).await?.is_some());
 
-        println!("record: {:#?}", bob_agent.read(&room_path, None, &[&b_did]).await?.is_some());
+        println!("record: {:#?}", bob_agent.read(&room_path, None, None).await?.is_some());
 
 
-        println!("ARD: {}", JsonRpc::new(did_resolver.clone()).client_debug("http://localhost:3000").await?);
-        println!("BRD: {}", JsonRpc::new(did_resolver.clone()).client_debug("http://localhost:3001").await?);
+        println!("ARD: {}", JsonRpcClient::client_debug("http://localhost:3000").await);
+        println!("BRD: {}", JsonRpcClient::client_debug("http://localhost:3001").await);
         assert!(false);
         Ok(())
     }.await;

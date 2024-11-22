@@ -18,7 +18,7 @@ use super::permission::{PermissionSet, PermissionOptions};
 use super::protocol::{SystemProtocols, Protocol};
 use super::traits::Router;
 
-use simple_crypto::{SecretKey, Key, Hashable, Hash};
+use simple_crypto::{SecretKey, Key, Hashable};
 
 use crate::dids::signing::SignedObject;
 use crate::dids::Did;
@@ -140,7 +140,7 @@ impl PrivateClient {
 
         let protocol = self.protocol_fetcher.get(&record.protocol)?;
         let item_perms = PermissionSet::new(
-            vec![b"channelitem".to_vec().hash()], discover, channel.create.clone(), channel.read.clone(), None, None
+            vec![SystemProtocols::channel_item().uuid()], discover, channel.create.clone(), channel.read.clone(), None, None
         ).get_min_perms(protocol)?;
         let record = PermissionedRecord::new(item_perms, record);
         let item = Self::construct_dwn_item(&create, record)?;
@@ -169,7 +169,7 @@ impl PrivateClient {
         let read = channel.read.secret_key().ok_or(error("Missing ReadChild Perms"))?;
 
         let mut item_perms = PermissionSet::new(
-            vec![b"channelitem".to_vec().hash()], discover_child.derive_usize(start)?, Key::new_public(create), Key::new_secret(read), None, None
+            vec![SystemProtocols::channel_item().uuid()], discover_child.derive_usize(start)?, Key::new_public(create), Key::new_secret(read), None, None
         );
 
         let mut results = Vec::new();
@@ -266,9 +266,7 @@ impl PrivateClient {
         &self,
         perms: PermissionSet,
     ) -> PermissionedRecord {
-        let protocol = SystemProtocols::root();
-        let root_record = Record::new(Some(Hash::all_zeros()), &protocol, Vec::new());
-        PermissionedRecord::new(perms.trim(&protocol), root_record)
+        PermissionedRecord::new(perms.trim(&SystemProtocols::root()), Record::new_root())
     }
 
     fn construct_perm_record(

@@ -13,6 +13,7 @@ use crate::dids::{DidKeyPair, Did};
 use jsonschema::JSONSchema;
 use schemars::JsonSchema;
 use serde::{Serialize, Deserialize};
+use uuid::Uuid;
 
 use std::collections::BTreeMap;
 
@@ -22,14 +23,30 @@ use simple_database::Indexable;
 
 #[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Record {
-    pub record_id: Hash,
+    pub record_id: Uuid,
     pub protocol: Hash,
     pub payload: Vec<u8>,
 }
 
 impl Record {
-    pub fn new(record_id: Option<Hash>, protocol: &Protocol, payload: Vec<u8>) -> Self {
-        Record{record_id: record_id.unwrap_or(payload.hash()), protocol: protocol.hash(), payload}
+    pub fn new(record_id: Option<Uuid>, protocol: &Protocol, payload: Vec<u8>) -> Self {
+        Record{record_id: record_id.unwrap_or(Uuid::new_v4()), protocol: protocol.hash(), payload}
+    }
+
+    pub fn new_root() -> Self {
+        Self::new(
+            Some(Uuid::new_v5(&Uuid::NAMESPACE_OID, b"ROOT")),
+            &SystemProtocols::root(),
+            Vec::new()
+        )
+    }
+
+    pub fn new_protocol(protocol: &Protocol) -> Result<Self, Error> {
+        Ok(Record{
+            record_id: protocol.uuid(),
+            protocol: protocol.hash(),
+            payload: serde_json::to_vec(protocol)?
+        })
     }
 
     pub fn validate(&self, protocol: &Protocol) -> Result<(), Error> {
@@ -105,7 +122,7 @@ impl PublicRecord {
 
 impl Hashable for PublicRecord {}
 impl Indexable for PublicRecord {
-    fn primary_key(&self) -> Vec<u8> {self.inner.inner().0.record_id.to_vec()}
+    fn primary_key(&self) -> Vec<u8> {self.inner.inner().0.record_id.as_bytes().to_vec()}
     fn secondary_keys(&self) -> Index {
         let mut indexes = self.inner.inner().1.clone();
         indexes.insert("author".to_string(), self.inner.signer().to_string().into());
@@ -162,7 +179,7 @@ pub type PrivateDeleteRequest = SignedObject<PublicKey>;//Delete Signed Some(Dis
 pub type PublicCreateRequest = PublicRecord;
 pub type PublicReadRequest = (Filters, Option<SortOptions>);
 pub type PublicUpdateRequest = PublicRecord;
-pub type PublicDeleteRequest = SignedObject<Hash>;
+pub type PublicDeleteRequest = SignedObject<Uuid>;
 
 pub type DMCreateRequest = DwnItem;
 pub type DMReadRequest = SignedObject<DateTime<Utc>>;
@@ -234,11 +251,11 @@ impl std::fmt::Debug for DwnResponse {
 #[derive(JsonSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DwnKey {
     pub key: SecretKey,
-    pub path: Vec<Hash>
+    pub path: Vec<Uuid>
 }
 
 impl DwnKey {
-    pub fn new(key: SecretKey, path: Vec<Hash>) -> Self {
+    pub fn new(key: SecretKey, path: Vec<Uuid>) -> Self {
         DwnKey{key, path}
     }
 
@@ -246,11 +263,11 @@ impl DwnKey {
         DwnKey{key, path: vec![]}
     }
 
-    pub fn derive_path(&self, path: &[Hash]) -> Result<Self, Error> {
+    pub fn derive_path(&self, path: &[Uuid]) -> Result<Self, Error> {
         if let Some(striped_path) = path.strip_prefix(self.path.as_slice()) {
             let mut key = self.key.clone();
-            for hash in striped_path {
-                key = key.derive_hash(hash)?;
+            for uuid in striped_path {
+                key = key.derive_bytes(uuid.as_bytes())?;
             }
             Ok(DwnKey::new(key, path.to_owned()))
         } else {Err(Error::InsufficentPermission())}
