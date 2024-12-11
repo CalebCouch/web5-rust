@@ -79,7 +79,7 @@ pub enum AgentRequest {
     UpdatePublic(usize, Box<PublicRecord>, Signer),
     DeletePublic(usize, Uuid, Signer),
 
-    CreateDM(Uuid, PermissionSet, Signer, PublicKey),
+    CreateDM(Uuid, Box<PermissionSet>, Signer, PublicKey),
     //Read(PermissionSet, Signer),
 }
 
@@ -147,7 +147,7 @@ impl AgentRequest {
             Self::DeletePublic(_, uuid, signer) =>
                 DwnRequest::DeletePublic(SignedObject::new(signer, uuid)?),
             Self::CreateDM(_, perms, signer, com_key) =>
-                DwnRequest::CreateDM(Self::create_dm_request(signer, com_key, perms)?)
+                DwnRequest::CreateDM(Self::create_dm_request(signer, com_key, *perms)?)
         })
     }
 
@@ -238,7 +238,7 @@ impl AgentRequest {
     pub fn create_dm(
         perms: PermissionSet, signer: Signer, com_key: PublicKey
     ) -> Result<AgentRequest, Error> {
-        Ok(AgentRequest::CreateDM(Uuid::new_v4(), perms, signer, com_key))
+        Ok(AgentRequest::CreateDM(Uuid::new_v4(), Box::new(perms), signer, com_key))
     }
 }
 
@@ -323,7 +323,7 @@ impl PrivateRecord {
         PrivateRecord{perms, protocol, payload}
     }
 
-    pub fn into_public(self) -> Record {
+    pub fn into_record(self) -> Record {
         Record{path: self.perms.path, protocol: self.protocol, payload: self.payload}
     }
 

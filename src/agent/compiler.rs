@@ -65,6 +65,7 @@ impl<'a> CompilerMemory<'a> {
 
 pub type WaitPayload<'a> = (Endpoint, BoxCallback<'a>, Vec<Uuid>);
 
+//TODO: Preserve ordering of requests
 pub struct Compiler<'a> {
     original_requests: Option<Vec<Uuid>>,
     ready: Option<BTreeMap<Uuid, (Endpoint, BoxCommand<'a>)>>,
@@ -174,7 +175,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    pub async fn compile<'b>(mut self) -> (Vec<Box<dyn Response + 'static>>, CompilerMemory<'a>) {
+    pub async fn compile<'b>(mut self) -> (Vec<Vec<Box<dyn Response + 'static>>>, CompilerMemory<'a>) {
         loop {
             //self.print();
             for (uuid, (ep, command)) in self.ready.replace(Default::default()).unwrap() {
@@ -272,7 +273,7 @@ impl<'a> Compiler<'a> {
         }
         let mut responses = self.completed.replace(Default::default()).unwrap();
         (self.original_requests.replace(Default::default()).unwrap().into_iter().map(|uuid| {
-            responses.remove(&uuid).unwrap()
+            *responses.remove(&uuid).unwrap().downcast::<Vec<Box<dyn Response>>>().unwrap()
         }).collect(), self.memory)
     }
 }

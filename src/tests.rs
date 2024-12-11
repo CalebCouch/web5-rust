@@ -28,8 +28,10 @@ use crate::dwn::{Dwn, DwnIdentity};
 
 use crate::agent::{Wallet, Agent, Identity};
 use crate::agent::structs::{RecordPath, Record};
+use crate::agent::commands;
 use crate::agent::permission::{ChannelPermissionOptions, PermissionOptions};
 use crate::agent::protocol::{ChannelProtocol, Protocol};
+use crate::agent::traits::TypeDebug;
 
 use crate::common::Schemas;
 
@@ -171,22 +173,41 @@ async fn run_test() -> Result<(), Error> {
 
     let mut compiler = alice_agent.new_compiler(mem);
 
-    let record = PublicRecord::new(None, rooms_protocol.uuid(), b"\"HELLOE\"", None)?;
-    let id = record.uuid;
-    compiler.add_command(
-        CreatePublic::new(record, None),
-        Some(vec![a_did.clone()])
-    ).await?;
+  //let record = PublicRecord::new(None, rooms_protocol.uuid(), b"\"HELLOE\"", None)?;
+  //let id = record.uuid;
+  //compiler.add_command(
+  //    CreatePublic::new(record, None),
+  //    Some(vec![a_did.clone()])
+  //).await?;
 
-//  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"HELLOE\"");
-//  compiler.add_command(
-//      CreatePrivate::new(record, None),
-//      Some(vec![a_did.clone()])
-//  ).await?;
-
+    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"1\"");
+    compiler.add_command(CreatePrivate::new(record, None), None).await?;
+    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"2\"");
+    compiler.add_command(CreatePrivate::new(record, None), None).await?;
+    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"3\"");
+    compiler.add_command(CreatePrivate::new(record, None), None).await?;
+    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"4\"");
+    compiler.add_command(CreatePrivate::new(record, None), None).await?;
+    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"5\"");
+    compiler.add_command(CreatePrivate::new(record, None), None).await?;
+    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"6\"");
+    compiler.add_command(CreatePrivate::new(record, None), None).await?;
+    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"7\"");
+    compiler.add_command(CreatePrivate::new(record, None), None).await?;
+    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"8\"");
+    compiler.add_command(CreatePrivate::new(record, None), None).await?;
+    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"9\"");
+    compiler.add_command(CreatePrivate::new(record, None), None).await?;
 
     let (res, mem) = compiler.compile().await;
     println!("R: {:#?}", res);
+    let mut compiler = alice_agent.new_compiler(mem);
+
+    compiler.add_command(Scan::new(RecordPath::new(&[]), 0), None).await?;
+
+    let (mut res, mem) = compiler.compile().await;
+  //println!("type: {}", res.get_full_type());
+  //println!("R: {:#?}", *res.remove(0).remove(0).downcast::<Vec<Record>>()?);
   //let mut compiler = alice_agent.new_compiler(mem);
 
   //let record = PublicRecord::new(Some(id), rooms_protocol.uuid(), b"\"H\"", None)?;

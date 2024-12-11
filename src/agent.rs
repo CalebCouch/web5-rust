@@ -157,7 +157,7 @@ impl Agent {
 
     pub fn tenant(&self) -> &Did {&self.agent_key.sig_key.public.did}
 
-    pub fn new_compiler_memory<'a>(&'a self) -> CompilerMemory<'a> {
+    pub fn new_compiler_memory(&self) -> CompilerMemory {
         CompilerMemory{
             did_resolver: &*self.did_resolver,
             record_info: BTreeMap::default(),

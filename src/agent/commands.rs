@@ -404,3 +404,42 @@ impl<'a> Command<'a> for CreateDM {
 //          ])
 //      }
 //  }
+
+#[derive(Serialize, Debug, Clone)]
+pub enum Scan {
+    #[allow(non_camel_case_types)]
+    new(RecordPath, usize),
+    Scanning(RecordPath, Vec<PrivateRecord>, usize, Option<Responses>),
+}
+
+#[async_trait::async_trait]
+impl<'a> Command<'a> for Scan {
+    async fn process(
+        self: Box<Self>, uuid: Uuid, ep: Endpoint, _: &mut CompilerMemory
+    ) -> Result<Tasks<'a>, Error> {
+        match *self {
+            Self::new(path, start) => {
+                Task::next(uuid, ep, Self::Scanning(path, vec![], start, None))
+            },
+            Self::Scanning(path, mut results, index, responses) => {
+                if let Some(responses) = responses {
+                    for response in responses {
+                        let record = *response.downcast::<Option<Box<PrivateRecord>>>()?;
+                        match record {
+                            Some(record) => results.push(*record),
+                            None => {return Task::completed(uuid, results);}
+                        }
+                    }
+                }
+                let batch = if index >= 5 {index*2} else {5};
+                let requests = (0..batch).map(|i| {
+                    println!("Scanning index {}", index+i);
+                    Task::ready(ep.clone(), ReadPrivate::child(path.clone(), index+i))
+                }).collect::<Vec<_>>();
+
+                let callback = move |r: Responses| {Self::Scanning(path, results, batch+index, Some(r))};
+                Task::waiting(uuid, ep, Callback::new(callback), requests)
+            }
+        }
+    }
+}

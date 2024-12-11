@@ -120,7 +120,7 @@ impl<'a> Command<'a> for ReadPrivate {
             },
             Self::Complete(mut results) => {
                 let pr = results.remove(0).downcast::<Option<Box<PrivateRecord>>>()?;
-                Task::completed(uuid, pr.map(|pr| (*pr).into_public()))
+                Task::completed(uuid, pr.map(|pr| (*pr).into_record()))
             },
         }
     }
@@ -310,5 +310,33 @@ impl<'a> Command<'a> for DeletePublic {
         Task::waiting(uuid, ep.clone(), Callback::new(commands::EnsureEmpty::new), vec![
             Task::Request(ep, AgentRequest::delete_public(0, self.uuid, signer)?)
         ])
+    }
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub enum Scan {
+    #[allow(non_camel_case_types)]
+    new(RecordPath, usize),
+    Completed(Responses),
+}
+
+#[async_trait::async_trait]
+impl<'a> Command<'a> for Scan {
+    async fn process(
+        self: Box<Self>, uuid: Uuid, ep: Endpoint, _: &mut CompilerMemory
+    ) -> Result<Tasks<'a>, Error> {
+        match *self {
+            Self::new(path, start) => {
+                Task::waiting(uuid, ep.clone(), Callback::new(Self::Completed), vec![
+                    Task::ready(ep, commands::Scan::new(path, start))
+                ])
+            },
+            Self::Completed(mut responses) => {
+                let records = *responses.remove(0).downcast::<Vec<PrivateRecord>>()?;
+                Task::completed(uuid,
+                    records.into_iter().map(|pr| pr.into_record()).collect::<Vec<_>>()
+                )
+            }
+        }
     }
 }

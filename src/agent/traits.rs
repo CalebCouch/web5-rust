@@ -65,7 +65,26 @@ pub trait TypeDebug: std::fmt::Debug {
 
 impl<T: std::fmt::Debug> TypeDebug for T {}
 
-pub trait Response: Any + std::fmt::Debug + DowncastSync + DynClone + Serialize + TypeDebug {}
+pub trait Response: Any + std::fmt::Debug + DowncastSync + DynClone + Serialize + TypeDebug {
+  //pub fn handle_error(self) -> Result<Box<dyn Response>, Error> {
+  //    if let Some(error) = response.downcast_ref::<ErrorWrapper>() {
+  //        return error.into();
+  //    } else {Ok(self)}
+  //}
+  //pub fn unique_read_private(self) -> Result<(), Error> {
+  //    for response in self.downcast::<Vec<Box<dyn Response>>>()? {
+  //        response.downcast::<Vec<PrivateRecord>>()?;
+  //    }
+  //    Ok(())
+  //}
+
+  //fn empty_success(self: Box<Self>) -> Result<(), Error> where Self: Sized + DowncastSync {
+  //    for response in self.downcast::<Vec<Box<dyn Response>>>()? {
+  //        response.downcast::<()>()?;
+  //    }
+  //    Ok(())
+  //}
+}
 erased_serde::serialize_trait_object!(Response);
 clone_trait_object!(Response);
 
