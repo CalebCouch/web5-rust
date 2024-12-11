@@ -11,7 +11,7 @@ pub use dwn::{DwnIdentity, Dwn};
 pub use dwn::traits::{Client, Server};
 pub use dwn::router::Router;
 pub use dwn::json_rpc::{JsonRpcClient, JsonRpcServer};
-pub use dwn::structs::PublicRecord;
+pub use dwn::structs::{PublicRecord};
 
 mod agent;
 pub use agent::scripts;
