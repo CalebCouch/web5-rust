@@ -1827,6 +1827,7 @@ version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29f835d03d717946d28b1d1ed632eb6f0e24a299388ee623d0c23118d3e8a7fa"
 dependencies = [
+ "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -2872,6 +2873,7 @@ dependencies = [
  "chrono",
  "dyn-clone",
  "hex",
+ "rusqlite",
  "serde",
  "serde_json",
  "thiserror",
@@ -3434,7 +3436,7 @@ dependencies = [
 
 [[package]]
 name = "web5-rust"
-version = "2.0.0-beta3"
+version = "2.0.0-beta4"
 dependencies = [
  "actix-web",
  "async-trait",

@@ -163,7 +163,7 @@ async fn run_test() -> Result<(), Error> {
     let alice_agent = Agent::new(
         a_wallet.root(),
         protocols.clone(),
-        &*did_resolver,
+        did_resolver,
         Box::new(JsonRpcClient{})
     );
 

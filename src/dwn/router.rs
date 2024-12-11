@@ -13,14 +13,14 @@ use url::Url;
 
 use crate::agent::traits::TypeDebug;
 
-pub struct Router<'a> {
-    did_resolver: &'a dyn DidResolver,
+pub struct Router {
+    did_resolver: Box<dyn DidResolver>,
     client: Box<dyn Client>
 }
 
-impl<'a> Router<'a> {
+impl Router {
     pub fn new(
-        did_resolver: &'a dyn DidResolver,
+        did_resolver: Box<dyn DidResolver>,
         client: Box<dyn Client>,
     ) -> Self {
         Router{did_resolver, client}
@@ -42,7 +42,7 @@ impl<'a> Router<'a> {
         Ok(BTreeMap::from_iter(future::try_join_all(requests.into_iter().map(|(ep, request)| async move {
             println!("EPREQUEST BATCH: {:?}, {:#?}", ep.1.to_string(), request.iter().map(|(h, v)| format!("{:?}", (h, v.truncate_debug()))).collect::<Vec<_>>());
             let ser_reqs = serde_json::to_vec(&request)?;
-            Ok::<_, Error>((ep.clone(), self.send_packet(&Packet::new(self.did_resolver, ep.0, &ser_reqs).await?, ep.1).await?))
+            Ok::<_, Error>((ep.clone(), self.send_packet(&Packet::new(&*self.did_resolver, ep.0, &ser_reqs).await?, ep.1).await?))
         })).await?))
     }
 }

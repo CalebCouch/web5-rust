@@ -135,31 +135,31 @@ impl Wallet {
   //}
 }
 
-pub struct Agent<'a> {
+pub struct Agent {
     agent_key: AgentKey,
-    did_resolver: &'a dyn DidResolver,
+    did_resolver: Box<dyn DidResolver>,
     protocols: BTreeMap<Uuid, Protocol>,
-    router: Router<'a>,
+    router: Router,
 }
 
-impl<'a> Agent<'a> {
+impl Agent {
     pub fn new(
         agent_key: AgentKey,
         protocols: Vec<Protocol>,
-        did_resolver: &'a dyn DidResolver,
+        did_resolver: Box<dyn DidResolver>,
         client: Box<dyn Client>
     ) -> Self {
         let protocols = [SystemProtocols::all(), protocols].concat();
         let protocols = BTreeMap::from_iter(protocols.into_iter().map(|p| (p.uuid(), p)));
-        let router = Router::new(did_resolver, client);
+        let router = Router::new(did_resolver.clone(), client);
         Agent{agent_key, did_resolver, protocols, router}
     }
 
     pub fn tenant(&self) -> &Did {&self.agent_key.sig_key.public.did}
 
-    pub fn new_compiler_memory(&'a self) -> CompilerMemory<'a> {
+    pub fn new_compiler_memory<'a>(&'a self) -> CompilerMemory<'a> {
         CompilerMemory{
-            did_resolver: self.did_resolver,
+            did_resolver: &*self.did_resolver,
             record_info: BTreeMap::default(),
             create_index: BTreeMap::default(),
             protocols: &self.protocols,
@@ -168,7 +168,7 @@ impl<'a> Agent<'a> {
         }
     }
 
-    pub fn new_compiler(&'a self, mem: CompilerMemory<'a>) -> Compiler<'a> {
-        Compiler::<'a>::new(mem, &self.router, self.did_resolver, self.tenant().clone())
+    pub fn new_compiler<'a>(&'a self, mem: CompilerMemory<'a>) -> Compiler<'a> {
+        Compiler::<'a>::new(mem, &self.router, &*self.did_resolver, self.tenant().clone())
     }
 }

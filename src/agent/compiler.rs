@@ -73,14 +73,14 @@ pub struct Compiler<'a> {
     completed: Option<BTreeMap<Uuid, BoxResponse>>,
 
     did_resolver: &'a dyn DidResolver,
-    router: &'a Router<'a>,
+    router: &'a Router,
     tenant: Did,
 
     memory: CompilerMemory<'a>,
 }
 
 impl<'a> Compiler<'a> {
-    pub fn new(memory: CompilerMemory<'a>, router: &'a Router<'a>, did_resolver: &'a dyn DidResolver, tenant: Did) -> Self {
+    pub fn new(memory: CompilerMemory<'a>, router: &'a Router, did_resolver: &'a dyn DidResolver, tenant: Did) -> Self {
         Compiler{
             original_requests: Some(Vec::new()),
             ready: Some(BTreeMap::default()),
