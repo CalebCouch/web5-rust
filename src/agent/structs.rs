@@ -35,7 +35,7 @@ pub type RecordInfo = (Protocol, PermissionSet);
 pub type Responses = Vec<Box<dyn Response>>;
 pub type BoxResponse = Box<dyn Response>;
 
-#[derive(JsonSchema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(JsonSchema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct RecordPath {
     inner: Vec<Uuid>
 }
@@ -43,6 +43,10 @@ pub struct RecordPath {
 impl RecordPath {
     pub fn new(path: &[Uuid]) -> Self {
         RecordPath{inner: path.to_vec()}
+    }
+
+    pub fn last(&self) -> Uuid {
+        self.inner.last().copied().unwrap_or(Uuid::nil())
     }
 
     pub fn is_empty(&self) -> bool {self.inner.is_empty()}
