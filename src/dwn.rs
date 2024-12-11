@@ -45,6 +45,9 @@ pub struct DwnIdentity {
 }
 
 impl DwnIdentity {
+    pub async fn publish_doc(&self, document: &DhtDocument) -> Result<(), Error> {
+        document.publish(&self.did_key).await
+    }
     pub fn new(service_endpoints: Vec<String>) -> Result<(Self, DhtDocument), Error> {
         let did_key = EdSecretKey::new();
         let did_pub = did_key.public_key();
