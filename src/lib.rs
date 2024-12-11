@@ -17,6 +17,8 @@ mod agent;
 pub use agent::scripts;
 pub use agent::commands;
 pub use agent::{Agent, Wallet, Identity, AgentKey};
+pub use agent::permission::{PermissionOptions, ChannelPermissionOptions};
+pub use agent::protocol::{Protocol, ChannelProtocol};
 
 pub extern crate simple_database;
 
