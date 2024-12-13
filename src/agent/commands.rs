@@ -2,7 +2,7 @@ use super::Error;
 
 use super::compiler::CompilerMemory;
 use super::permission::{PermissionOptions, PermissionSet};
-use super::protocol::SystemProtocols;
+use super::protocol::{SystemProtocols, Protocol};
 use super::traits::Command;
 use super::structs::{
     PrivateRecord,
@@ -85,6 +85,7 @@ pub enum ReadPrivate {
     #[allow(non_camel_case_types)]
     child(RecordPath, usize),
     ChildInfo(Responses, usize),
+    ChildComplete(Responses, Protocol),
     #[allow(non_camel_case_types)]
     path(RecordPath),
     #[allow(non_camel_case_types)]
@@ -136,7 +137,15 @@ impl<'a> Command<'a> for ReadPrivate {
             Self::ChildInfo(mut responses, index) => {
                 let info = *responses.remove(0).downcast::<RecordInfo>()?;
                 let perms = info.1.pointer(index)?;
-                Task::next(uuid, ep, Self::new(Box::new(perms), true))
+                let callback = move |r: Responses| {Self::ChildComplete(r, info.0)};
+                Task::waiting(uuid, ep.clone(), Callback::new(callback), vec![
+                    Task::ready(ep, Self::new(Box::new(perms), true))
+                ])
+            },
+            Self::ChildComplete(mut r, parent_protocol) => {
+                let mut child = *r.remove(0).downcast::<(Option<Box<PrivateRecord>>, bool)>()?;
+                child.0.as_mut().filter(|c| parent_protocol.validate_child(&c.protocol).is_ok());
+                Task::completed(uuid, child)
             },
             Self::path(path) => {
                 if path.is_empty() {
