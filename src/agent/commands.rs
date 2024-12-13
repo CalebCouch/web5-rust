@@ -89,13 +89,13 @@ pub enum ReadPrivate {
     path(RecordPath),
     #[allow(non_camel_case_types)]
     new(Box<PermissionSet>, bool),
-    Complete(Responses, Box<PermissionSet>, bool),
+    Complete(Responses, Box<PermissionSet>, bool, bool),
 }
 
 impl ReadPrivate {
     fn read_private(
         perms: &PermissionSet, mem: &CompilerMemory, response: &DwnResponse
-    ) -> Result<Option<PrivateRecord>, Error> {
+    ) -> Result<(Option<PrivateRecord>, bool), Error> {
         let discover = perms.discover.public_key();
         let create = perms.create.public_key();
         let read = perms.read.secret_key().ok_or(Error::invalid_auth("Read"))?;
@@ -115,8 +115,8 @@ impl ReadPrivate {
                     return Err(Error::bad_response("Internal and External Key Mismatch"));
                 }
                 record.perms = record.perms.combine(perms)?;
-                Ok(Some(record))
-            } else {Ok(None)}
+                Ok((Some(record), true))
+            } else {Ok((None, false))}
         } else {Err(Error::bad_response(&format!("Expected ReadPrivate(_) got {:?}", response)))}
     }
 }
@@ -141,9 +141,9 @@ impl<'a> Command<'a> for ReadPrivate {
             Self::path(path) => {
                 if path.is_empty() {
                     let protocol = SystemProtocols::root();
-                    Task::completed(uuid, Some(Box::new(
+                    Task::completed(uuid, (Some(Box::new(
                         PrivateRecord::new(mem.key.get_perms_from_slice(&[], Some(&protocol))?, protocol.uuid(), Vec::new())
-                    )))
+                    )), true))
                 } else {
                     let perms = mem.key.get_perms(&path, None)?;
                     Task::next(uuid, ep, Self::new(Box::new(perms), true))
@@ -151,31 +151,33 @@ impl<'a> Command<'a> for ReadPrivate {
             },
             Self::new(perms, resolve) => {
                 let req = AgentRequest::read_private(perms.discover())?;
-                let callback = move |r: Responses| {Self::Complete(r, Box::new(*perms), resolve)};
+                let callback = move |r: Responses| {Self::Complete(r, Box::new(*perms), resolve, false)};
                 Task::waiting(uuid, ep.clone(), Callback::new(callback), vec![
                     Task::Request(ep, req)
                 ])
             }
-            Self::Complete(mut results, perms, resolve) => {
+            Self::Complete(mut results, perms, resolve, exists) => {
                 let res = results.remove(0).downcast::<DwnResponse>()?;
-                let record = Self::read_private(&perms, mem, &res).ok().flatten();
-                let record = if let Some(record) = record {
-                    if resolve && record.protocol == SystemProtocols::perm_pointer().uuid() {
-                        let perms: PermissionSet = serde_json::from_slice(&record.payload)?;
-                        let req = AgentRequest::read_private(perms.discover())?;
-                        let callback = move |r: Responses| {Self::Complete(r, Box::new(perms), false)};
-                        return Task::waiting(uuid, ep.clone(), Callback::new(callback), vec![
-                            Task::Request(ep, req)
-                        ]);
-                    }
-                    if let Ok(protocol) = mem.get_protocol(&record.protocol) {
-                        mem.record_info.insert(
-                            (ep.clone(), perms.path.clone()),
-                            (protocol.clone(), record.perms.clone())
-                        );
-                    }
-                    Some(Box::new(record))
-                } else {None};
+                let record = if let Ok((record, nexists)) = Self::read_private(&perms, mem, &res) {
+                    let exists = exists || nexists;
+                    if let Some(record) = record {
+                        if resolve && record.protocol == SystemProtocols::perm_pointer().uuid() {
+                            let perms: PermissionSet = serde_json::from_slice(&record.payload)?;
+                            let req = AgentRequest::read_private(perms.discover())?;
+                            let callback = move |r: Responses| {Self::Complete(r, Box::new(perms), false, exists)};
+                            return Task::waiting(uuid, ep.clone(), Callback::new(callback), vec![
+                                Task::Request(ep, req)
+                            ]);
+                        }
+                        if let Ok(protocol) = mem.get_protocol(&record.protocol) {
+                            mem.record_info.insert(
+                                (ep.clone(), perms.path.clone()),
+                                (protocol.clone(), record.perms.clone())
+                            );
+                        }
+                        (Some(Box::new(record)), exists)
+                    } else {(None, exists)}
+                } else {(None, exists)};
                 Task::completed(uuid, record)
             },
         }
@@ -208,7 +210,7 @@ impl<'a> Command<'a> for ReadInfo {
                 }
             }
             Self::Complete(mut results) => {
-                let record = *results.remove(0).downcast::<Option<Box<PrivateRecord>>>()?;
+                let record = results.remove(0).downcast::<(Option<Box<PrivateRecord>>, bool)>()?.0;
                 if let Some(record) = record {
                     Task::completed(uuid, (mem.get_protocol(&record.protocol)?.clone(), record.perms))
                 } else {Err(Error::not_found("Record information"))}
@@ -338,7 +340,7 @@ impl<'a> Command<'a> for ReadIndex {
                 ])
             }
             Self::Complete(mut results) => {
-                let record = results.remove(0).downcast::<Option<Box<PrivateRecord>>>()?;
+                let record = results.remove(0).downcast::<(Option<Box<PrivateRecord>>, bool)>()?.0;
                 let payload = record.map(|r|
                     serde_json::from_slice::<usize>(&r.payload)
                 ).transpose()?;
@@ -424,10 +426,10 @@ impl<'a> Command<'a> for Scan {
             Self::Scanning(path, mut results, index, responses) => {
                 if let Some(responses) = responses {
                     for response in responses {
-                        let record = *response.downcast::<Option<Box<PrivateRecord>>>()?;
-                        match record {
-                            Some(record) => results.push(*record),
-                            None => {return Task::completed(uuid, results);}
+                        match *response.downcast::<(Option<Box<PrivateRecord>>, bool)>()? {
+                            (Some(record), _) => results.push(*record),
+                            (_, true) => {},
+                            (None, _) => {return Task::completed(uuid, results);}
                         }
                     }
                 }

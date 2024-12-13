@@ -13,6 +13,7 @@ use url::Url;
 
 use crate::agent::traits::TypeDebug;
 
+#[derive(Clone)]
 pub struct Router {
     did_resolver: Box<dyn DidResolver>,
     client: Box<dyn Client>

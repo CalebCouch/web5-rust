@@ -135,6 +135,7 @@ impl Wallet {
   //}
 }
 
+#[derive(Clone)]
 pub struct Agent {
     agent_key: AgentKey,
     did_resolver: Box<dyn DidResolver>,

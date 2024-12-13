@@ -119,7 +119,7 @@ impl<'a> Command<'a> for ReadPrivate {
                 ])
             },
             Self::Complete(mut results) => {
-                let pr = results.remove(0).downcast::<Option<Box<PrivateRecord>>>()?;
+                let pr = results.remove(0).downcast::<(Option<Box<PrivateRecord>>, bool)>()?.0;
                 Task::completed(uuid, pr.map(|pr| (*pr).into_record()))
             },
         }
@@ -152,7 +152,7 @@ impl<'a> Command<'a> for UpdatePrivate<'a> {
                 ])
             },
             Self::UpdateOrCreate(mut r, record, p_opts) => {
-                match *r.remove(2).downcast::<Option<Box<PrivateRecord>>>()? {
+                match r.remove(2).downcast::<(Option<Box<PrivateRecord>>, bool)>()?.0 {
                     Some(e_record) => {
                         let protocol = mem.get_protocol(&record.protocol)?;
                         let perms = e_record.perms;
