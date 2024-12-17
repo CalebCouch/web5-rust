@@ -2865,9 +2865,9 @@ dependencies = [
 
 [[package]]
 name = "simple-database"
-version = "1.2.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8183e15f872eb417a2c8d6120f716f3a3a825288ce4eff0431ddb13062933304"
+checksum = "af305c1b908b399832bc806819b5942bce861e38fd2a8ffff31786e92b234879"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3436,7 +3436,7 @@ dependencies = [
 
 [[package]]
 name = "web5-rust"
-version = "2.0.0-beta8"
+version = "2.0.0-beta9"
 dependencies = [
  "actix-web",
  "async-trait",

@@ -180,24 +180,31 @@ async fn run_test() -> Result<(), Error> {
   //    Some(vec![a_did.clone()])
   //).await?;
 
-    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"1\"");
-    compiler.add_command(CreatePrivate::new(record, None), None).await?;
+    let path = RecordPath::new(&[Uuid::new_v4()]);
+    compiler.add_command(DeletePrivate::new(path.clone()), None).await?;
+    let record = Record::new(path.clone(), rooms_protocol.uuid(), b"\"1\"");
+    compiler.add_command(CreatePrivate::new(record.clone(), None), None).await?;
     let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"2\"");
-    compiler.add_command(CreatePrivate::new(record, None), None).await?;
+    compiler.add_command(CreatePrivate::new(record.clone(), None), None).await?;
     let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"3\"");
-    compiler.add_command(CreatePrivate::new(record, None), None).await?;
-    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"4\"");
-    compiler.add_command(CreatePrivate::new(record, None), None).await?;
-    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"5\"");
-    compiler.add_command(CreatePrivate::new(record, None), None).await?;
-    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"6\"");
-    compiler.add_command(CreatePrivate::new(record, None), None).await?;
-    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"7\"");
-    compiler.add_command(CreatePrivate::new(record, None), None).await?;
-    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"8\"");
-    compiler.add_command(CreatePrivate::new(record, None), None).await?;
-    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"9\"");
-    compiler.add_command(CreatePrivate::new(record, None), None).await?;
+    compiler.add_command(CreatePrivate::new(record.clone(), None), None).await?;
+//  compiler.add_command(UpdatePrivate::new(record, None), None).await?;
+//  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"2\"");
+//  compiler.add_command(CreatePrivate::new(record, None), None).await?;
+//  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"3\"");
+//  compiler.add_command(CreatePrivate::new(record, None), None).await?;
+//  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"4\"");
+//  compiler.add_command(CreatePrivate::new(record, None), None).await?;
+//  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"5\"");
+//  compiler.add_command(CreatePrivate::new(record, None), None).await?;
+//  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"6\"");
+//  compiler.add_command(CreatePrivate::new(record, None), None).await?;
+//  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"7\"");
+//  compiler.add_command(CreatePrivate::new(record, None), None).await?;
+//  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"8\"");
+//  compiler.add_command(CreatePrivate::new(record, None), None).await?;
+//  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"9\"");
+//  compiler.add_command(CreatePrivate::new(record, None), None).await?;
 
     let (res, mem) = compiler.compile().await;
     println!("R: {:#?}", res);
@@ -206,9 +213,11 @@ async fn run_test() -> Result<(), Error> {
     compiler.add_command(Scan::new(RecordPath::new(&[]), 0), None).await?;
 
     let (mut res, mem) = compiler.compile().await;
-  //println!("type: {}", res.get_full_type());
-  //println!("R: {:#?}", *res.remove(0).remove(0).downcast::<Vec<Record>>()?);
-  //let mut compiler = alice_agent.new_compiler(mem);
+    println!("R: {:#?}", *res.remove(0).remove(0).downcast::<Vec<Record>>()?);
+
+
+
+
 
   //let record = PublicRecord::new(Some(id), rooms_protocol.uuid(), b"\"H\"", None)?;
   //compiler.add_command(

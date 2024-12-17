@@ -5,12 +5,14 @@ use super::permission::{PermissionOptions, PermissionSet};
 use super::protocol::{SystemProtocols, Protocol};
 use super::traits::Command;
 use super::structs::{
+    MutableAgentRequest,
     PrivateRecord,
     AgentRequest,
     RecordPath,
     RecordInfo,
     Responses,
     Callback,
+    Header,
     Record,
     Tasks,
     Task,
@@ -38,7 +40,7 @@ impl EnsureEmpty {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for EnsureEmpty {
     async fn process(
-        self: Box<Self>, uuid: Uuid, _: Endpoint, _: &mut CompilerMemory
+        self: Box<Self>, uuid: Uuid, _: Header, _: &mut CompilerMemory
     ) -> Result<Tasks<'a>, Error> {
         for response in self.responses {
             if response.downcast_ref::<()>().is_some() {} else {
@@ -53,30 +55,30 @@ impl<'a> Command<'a> for EnsureEmpty {
 pub struct CreatePrivate {}
 impl CreatePrivate {
     pub fn create(
-        ep: Endpoint, mem: &mut CompilerMemory, record: Record, p_opts: Option<&PermissionOptions>
-    ) -> Result<(PermissionSet, AgentRequest), Error> {
-        let protocol = mem.get_protocol(&record.protocol)?;
-        let perms = mem.key.get_perms(&record.path, Some(protocol))?;
+        header: Header, mem: &mut CompilerMemory, record: Record, p_opts: Option<&PermissionOptions>
+    ) -> Result<(PermissionSet, MutableAgentRequest), Error> {
+        let protocol = mem.get_protocol(&record.protocol)?.clone();
+        let perms = mem.key.get_perms(&record.path, Some(&protocol))?;
         let min_perms = protocol.subset_permission(perms.clone(), None)?;
-        let req = AgentRequest::create_private(0, perms.clone(), p_opts, protocol, record.payload)?;
+        let req = MutableAgentRequest::create_private(perms.clone(), p_opts, &protocol, record.payload)?;
 
-        mem.record_info.insert((ep, record.path.clone()), (protocol.clone(), perms));
+        mem.record_info.insert((header.1, record.path.clone()), (protocol, perms));
 
         Ok((min_perms, req))
     }
 
     pub fn create_child(
-        ep: Endpoint, mem: &mut CompilerMemory,
+        header: Header, mem: &mut CompilerMemory,
         parent_perms: &PermissionSet, child_perms: &PermissionSet, index: usize
-    ) -> Result<(AgentRequest, AgentRequest), Error> {
-        let index_key = (ep, parent_perms.path.clone());
+    ) -> Result<(MutableAgentRequest, MutableAgentRequest, usize), Error> {
+        let index_key = (header.1, parent_perms.path.clone());
         let index = mem.create_index.get(&index_key).copied().unwrap_or(index);
         mem.create_index.insert(index_key, index+1);
 
         let index_perms = mem.key.get_perms(&parent_perms.path.index(), None)?;
-        let index_req = AgentRequest::update_index(index_perms, index+1)?;
-        let child_req = AgentRequest::create_private_child(0, parent_perms, child_perms, index)?;
-        Ok((index_req, child_req))
+        let index_req = MutableAgentRequest::update_index(index_perms, index+1)?;
+        let child_req = MutableAgentRequest::create_private_child(parent_perms, child_perms, index)?;
+        Ok((index_req, child_req, index+1))
     }
 }
 
@@ -125,21 +127,21 @@ impl ReadPrivate {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for ReadPrivate {
     async fn process(
-        self: Box<Self>, uuid: Uuid, ep: Endpoint, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::child(parent_path, index) => {
                 let callback = move |r: Responses| {Self::ChildInfo(r, index)};
-                Task::waiting(uuid, ep.clone(), Callback::new(callback), vec![
-                    Task::ready(ep, ReadInfo::new(parent_path, PermissionOptions::read_child()))
+                Task::waiting(uuid, header.clone(), Callback::new(callback), vec![
+                    Task::ready(header, ReadInfo::new(parent_path, PermissionOptions::read_child()))
                 ])
             },
             Self::ChildInfo(mut responses, index) => {
                 let info = *responses.remove(0).downcast::<RecordInfo>()?;
                 let perms = info.1.pointer(index)?;
                 let callback = move |r: Responses| {Self::ChildComplete(r, info.0)};
-                Task::waiting(uuid, ep.clone(), Callback::new(callback), vec![
-                    Task::ready(ep, Self::new(Box::new(perms), true))
+                Task::waiting(uuid, header.clone(), Callback::new(callback), vec![
+                    Task::ready(header, Self::new(Box::new(perms), true))
                 ])
             },
             Self::ChildComplete(mut r, parent_protocol) => {
@@ -155,14 +157,14 @@ impl<'a> Command<'a> for ReadPrivate {
                     )), true))
                 } else {
                     let perms = mem.key.get_perms(&path, None)?;
-                    Task::next(uuid, ep, Self::new(Box::new(perms), true))
+                    Task::next(uuid, header, Self::new(Box::new(perms), true))
                 }
             },
             Self::new(perms, resolve) => {
-                let req = AgentRequest::read_private(perms.discover())?;
+                let req = AgentRequest::ReadPrivate(perms.discover());
                 let callback = move |r: Responses| {Self::Complete(r, Box::new(*perms), resolve, false)};
-                Task::waiting(uuid, ep.clone(), Callback::new(callback), vec![
-                    Task::Request(ep, req)
+                Task::waiting(uuid, header.clone(), Callback::new(callback), vec![
+                    Task::Request(header, req)
                 ])
             }
             Self::Complete(mut results, perms, resolve, exists) => {
@@ -172,15 +174,15 @@ impl<'a> Command<'a> for ReadPrivate {
                     if let Some(record) = record {
                         if resolve && record.protocol == SystemProtocols::perm_pointer().uuid() {
                             let perms: PermissionSet = serde_json::from_slice(&record.payload)?;
-                            let req = AgentRequest::read_private(perms.discover())?;
+                            let req = AgentRequest::ReadPrivate(perms.discover());
                             let callback = move |r: Responses| {Self::Complete(r, Box::new(perms), false, exists)};
-                            return Task::waiting(uuid, ep.clone(), Callback::new(callback), vec![
-                                Task::Request(ep, req)
+                            return Task::waiting(uuid, header.clone(), Callback::new(callback), vec![
+                                Task::Request(header, req)
                             ]);
                         }
                         if let Ok(protocol) = mem.get_protocol(&record.protocol) {
                             mem.record_info.insert(
-                                (ep.clone(), perms.path.clone()),
+                                (header.1.clone(), perms.path.clone()),
                                 (protocol.clone(), record.perms.clone())
                             );
                         }
@@ -203,17 +205,17 @@ pub enum ReadInfo {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for ReadInfo {
     async fn process(
-        self: Box<Self>, uuid: Uuid, ep: Endpoint, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::new(path, p_opts) => {
-                match mem.record_info.get(&(ep.clone(), path.clone())) {
+                match mem.record_info.get(&(header.1.clone(), path.clone())) {
                     Some(info) if info.clone().1.subset(&p_opts).is_ok() => {
                         Task::completed(uuid, info.clone())
                     },
                     _ => {
-                        Task::waiting(uuid, ep.clone(), Callback::new(Self::Complete), vec![
-                            Task::ready(ep, ReadPrivate::path(path))
+                        Task::waiting(uuid, header.clone(), Callback::new(Self::Complete), vec![
+                            Task::ready(header, ReadPrivate::path(path))
                         ])
                     }
                 }
@@ -242,7 +244,7 @@ impl ReadParent {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for ReadParent {
     async fn process(
-        self: Box<Self>, uuid: Uuid, ep: Endpoint, mem: &mut CompilerMemory
+        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory
     ) -> Result<Tasks<'a>, Error> {
         let parent_path = self.path.parent()?;
         if parent_path.is_empty() {
@@ -252,7 +254,7 @@ impl<'a> Command<'a> for ReadParent {
             )))
         } else {
             let perms = mem.key.get_perms(&parent_path, None)?;
-            Task::next(uuid, ep, ReadPrivate::new(Box::new(perms), true))
+            Task::next(uuid, header, ReadPrivate::new(Box::new(perms), true))
         }
     }
 }
@@ -277,7 +279,7 @@ impl NextIndex {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for NextIndex {
     async fn process(
-        self: Box<Self>, uuid: Uuid, ep: Endpoint, _: &mut CompilerMemory
+        self: Box<Self>, uuid: Uuid, header: Header, _: &mut CompilerMemory
     ) -> Result<Tasks<'a>, Error> {
         let discover_child = self.discover_child;
         let mut index = self.index;
@@ -290,8 +292,8 @@ impl<'a> Command<'a> for NextIndex {
         }
         let discover = discover_child.derive_usize(self.index)?;
         let callback = move |r: Responses| {NextIndex::new(discover_child, index, Some(r))};
-        Task::waiting(uuid, ep.clone(), Callback::new(callback), vec![
-            Task::Ready(ep, Box::new(Exists::new(discover)))
+        Task::waiting(uuid, header.clone(), Callback::new(callback), vec![
+            Task::Ready(header, Box::new(Exists::new(discover)))
         ])
     }
 }
@@ -308,16 +310,16 @@ pub enum Exists {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for Exists {
     async fn process(
-        self: Box<Self>, uuid: Uuid, ep: Endpoint, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::path(path) => {
                 let discover = mem.key.get_perms(&path, None)?.discover();
-                Task::next(uuid, ep, Self::new(discover))
+                Task::next(uuid, header, Self::new(discover))
             },
             Self::new(key) => {
-                Task::waiting(uuid, ep.clone(), Callback::new(Self::Complete), vec![
-                    Task::Request(ep, AgentRequest::read_private(key)?)
+                Task::waiting(uuid, header.clone(), Callback::new(Self::Complete), vec![
+                    Task::Request(header, AgentRequest::ReadPrivate(key))
                 ])
             },
             Self::Complete(mut responses) => {
@@ -339,13 +341,13 @@ pub enum ReadIndex {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for ReadIndex {
     async fn process(
-        self: Box<Self>, uuid: Uuid, ep: Endpoint, mem: &mut CompilerMemory
+        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::new(path) => {
                 let perms = mem.key.get_perms(&path.index(), Some(&SystemProtocols::usize()))?;
-                Task::waiting(uuid, ep.clone(), Callback::new(Self::Complete), vec![
-                    Task::ready(ep, ReadPrivate::new(Box::new(perms), false))
+                Task::waiting(uuid, header.clone(), Callback::new(Self::Complete), vec![
+                    Task::ready(header, ReadPrivate::new(Box::new(perms), false))
                 ])
             }
             Self::Complete(mut results) => {
@@ -374,12 +376,12 @@ impl CreateDM {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for CreateDM {
     async fn process(
-        self: Box<Self>, uuid: Uuid, ep: Endpoint, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
     ) -> Result<Tasks<'a>, Error> {
         let signer = Signer::Left(mem.sig_key.clone());
         let (_, com_key) = mem.did_resolver.resolve_dwn_keys(&self.recipient).await?;
-        Task::waiting(uuid, ep.clone(), Callback::new(EnsureEmpty::new), vec![
-            Task::Request(ep, AgentRequest::create_dm(self.perms, signer, com_key)?)
+        Task::waiting(uuid, header.clone(), Callback::new(EnsureEmpty::new), vec![
+            Task::MutableRequest(header, MutableAgentRequest::create_dm(self.perms, signer, com_key)?, 0)
         ])
     }
 
@@ -426,11 +428,11 @@ pub enum Scan {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for Scan {
     async fn process(
-        self: Box<Self>, uuid: Uuid, ep: Endpoint, _: &mut CompilerMemory
+        self: Box<Self>, uuid: Uuid, header: Header, _: &mut CompilerMemory
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::new(path, start) => {
-                Task::next(uuid, ep, Self::Scanning(path, vec![], start, None))
+                Task::next(uuid, header, Self::Scanning(path, vec![], start, None))
             },
             Self::Scanning(path, mut results, index, responses) => {
                 if let Some(responses) = responses {
@@ -445,11 +447,11 @@ impl<'a> Command<'a> for Scan {
                 let batch = if index >= 5 {index*2} else {5};
                 let requests = (0..batch).map(|i| {
                     println!("Scanning index {}", index+i);
-                    Task::ready(ep.clone(), ReadPrivate::child(path.clone(), index+i))
+                    Task::ready(header.clone(), ReadPrivate::child(path.clone(), index+i))
                 }).collect::<Vec<_>>();
 
                 let callback = move |r: Responses| {Self::Scanning(path, results, batch+index, Some(r))};
-                Task::waiting(uuid, ep, Callback::new(callback), requests)
+                Task::waiting(uuid, header, Callback::new(callback), requests)
             }
         }
     }

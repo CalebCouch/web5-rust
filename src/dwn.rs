@@ -26,7 +26,6 @@ use structs::{
     Packet,
 };
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use simple_crypto::SecretKey;
@@ -99,17 +98,17 @@ impl Dwn {
 
     pub async fn process_packet(
         &self, packet: Packet
-    ) -> Result<BTreeMap<Uuid, DwnResponse>, Error> {
+    ) -> Result<Vec<(Uuid, DwnResponse)>, Error> {
         if packet.recipient != self.com_key.public.did {
             Err(Error::bad_request("Packet Not Addressed To Tenant"))
         } else {
             let payload = self.com_key.secret.decrypt(&packet.payload)?;
-            let reqs = serde_json::from_slice::<BTreeMap<Uuid, DwnRequest>>(&payload)?;
-            Ok(BTreeMap::from_iter(future::try_join_all(reqs.into_iter().map(|(uuid, req)| async move {
+            let reqs = serde_json::from_slice::<Vec<(Uuid, DwnRequest)>>(&payload)?;
+            Ok(future::try_join_all(reqs.into_iter().map(|(uuid, req)| async move {
                 let response = self.process_request(req).await;
                 if let Err(e) = &response {println!("Error: {}", e)}
                 Ok::<(Uuid, DwnResponse), Error>((uuid, response?))
-            })).await?))
+            })).await?)
         }
     }
 

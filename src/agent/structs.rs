@@ -35,6 +35,9 @@ pub type RecordInfo = (Protocol, PermissionSet);
 pub type Responses = Vec<Box<dyn Response>>;
 pub type BoxResponse = Box<dyn Response>;
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Header(pub Uuid, pub Endpoint);
+
 #[derive(JsonSchema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct RecordPath {
     inner: Vec<Uuid>
@@ -73,47 +76,65 @@ impl RecordPath {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub enum AgentRequest {
-    CreatePrivate(usize, Box<PrivateRecord>, SecretKey, SecretKey),
     ReadPrivate(SecretKey),
-    UpdatePrivate(usize, Box<PrivateRecord>, SecretKey, SecretKey, SecretKey),
-    DeletePrivate(usize, PublicKey, SecretKey),
-
-    CreatePublic(usize, Box<PublicRecord>, Signer),
-    ReadPublic(Uuid, Filters, Option<SortOptions>),
-    UpdatePublic(usize, Box<PublicRecord>, Signer),
-    DeletePublic(usize, Uuid, Signer),
-
-    CreateDM(Uuid, Box<PermissionSet>, Signer, PublicKey),
+    ReadPublic(Filters, Option<SortOptions>),
     //Read(PermissionSet, Signer),
+}
+
+impl AgentRequest {
+    pub fn into_dwn_request(self) -> Result<DwnRequest, Error> {
+        Ok(match self {
+            Self::ReadPrivate(discover) =>
+                DwnRequest::ReadPrivate(SignedObject::from_key(&discover, String::new())?),
+            Self::ReadPublic(filters, sort_options) =>
+                DwnRequest::ReadPublic(filters, sort_options),
+        })
+    }
 }
 
 impl Hashable for AgentRequest {}
 
-impl AgentRequest {
-    pub fn get_id(&self) -> Uuid {
+#[derive(Serialize, Clone, PartialEq, Eq)]
+pub enum MutableAgentRequest {
+    CreatePrivate(Box<PrivateRecord>, SecretKey, SecretKey),
+    UpdatePrivate(Box<PrivateRecord>, SecretKey, SecretKey, SecretKey),
+    DeletePrivate(PublicKey, SecretKey),
+
+    CreatePublic(Box<PublicRecord>, Signer),
+    UpdatePublic(Box<PublicRecord>, Signer),
+    DeletePublic(Uuid, Signer),
+
+    CreateDM(Box<PermissionSet>, Signer, PublicKey),
+}
+
+impl std::fmt::Debug for MutableAgentRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let id = self.get_id();
         match self {
-            Self::CreatePrivate(_,_,d,_) => Uuid::new_v5(&Uuid::NAMESPACE_OID, &d.public_key().to_vec()),
-            Self::ReadPrivate(d) => Uuid::new_v5(&Uuid::NAMESPACE_OID, &d.public_key().to_vec()),
-            Self::UpdatePrivate(_,_,d,_,_) => Uuid::new_v5(&Uuid::NAMESPACE_OID, &d.public_key().to_vec()),
-            Self::DeletePrivate(_,d,_) => Uuid::new_v5(&Uuid::NAMESPACE_OID, &d.to_vec()),
-            Self::CreatePublic(_,r,_) => r.uuid,
-            Self::ReadPublic(u,_,_) => *u,
-            Self::UpdatePublic(_,r,_) => r.uuid,
-            Self::DeletePublic(_,u,_) => *u,
-            Self::CreateDM(u,_,_,_) => *u
+            Self::CreatePrivate(p,_,_) => write!(f, "CreatePrivate({}, {:?})", id, p.payload.truncate_debug(20)),
+            Self::UpdatePrivate(p,_,_,_) => write!(f, "UpdatePrivate({}, {:?})", id, p.payload.truncate_debug(20)),
+            Self::DeletePrivate(_,_) => write!(f, "DeletePrivate({})", id),
+            Self::CreatePublic(r,_) => write!(f, "CreatePublic({}, {:?})", id, r.payload.truncate_debug(20)),
+            Self::UpdatePublic(r,_) => write!(f, "UpdatePublic({}, {:?})", id, r.payload.truncate_debug(20)),
+            Self::DeletePublic(_,_) => write!(f, "DeletePublic({})", id),
+            Self::CreateDM(_,_,_) => write!(f, "CreateDM({})", id),
         }
     }
-    pub fn priority(&self) -> Option<usize> {
-        match &self {
-            Self::CreatePrivate(p,_,_,_) => Some(*p),
-            Self::ReadPrivate(_) => None,
-            Self::UpdatePrivate(p,_,_,_,_) => Some(*p),
-            Self::DeletePrivate(p,_,_) => Some(*p),
-            Self::CreatePublic(p,_,_) => Some(*p),
-            Self::ReadPublic(_,_,_) => None,
-            Self::UpdatePublic(p,_,_) => Some(*p),
-            Self::DeletePublic(p,_,_) => Some(*p),
-            Self::CreateDM(_,_,_,_) => None,
+}
+
+
+impl Hashable for MutableAgentRequest {}
+
+impl MutableAgentRequest {
+    pub fn get_id(&self) -> Uuid {
+        match self {
+            Self::CreatePrivate(_,d,_) => Uuid::new_v5(&Uuid::NAMESPACE_OID, &d.public_key().to_vec()),
+            Self::UpdatePrivate(_,d,_,_) => Uuid::new_v5(&Uuid::NAMESPACE_OID, &d.public_key().to_vec()),
+            Self::DeletePrivate(d,_) => Uuid::new_v5(&Uuid::NAMESPACE_OID, &d.to_vec()),
+            Self::CreatePublic(r,_) => r.uuid,
+            Self::UpdatePublic(r,_) => r.uuid,
+            Self::DeletePublic(u,_) => *u,
+            Self::CreateDM(_,_,_) => Uuid::new_v4()
         }
     }
 
@@ -132,31 +153,26 @@ impl AgentRequest {
 
     pub fn into_dwn_request(self) -> Result<DwnRequest, Error> {
         Ok(match self {
-            Self::CreatePrivate(_, record, discover, create) =>
+            Self::CreatePrivate(record, discover, create) =>
                 DwnRequest::CreatePrivate(Self::create_request(*record, &discover, create)?),
-            Self::ReadPrivate(discover) =>
-                DwnRequest::ReadPrivate(SignedObject::from_key(&discover, String::new())?),
-            Self::UpdatePrivate(_, record, discover, create, delete) =>
+            Self::UpdatePrivate(record, discover, create, delete) =>
                 DwnRequest::UpdatePrivate(SignedObject::from_key(
                     &delete, Self::create_request(*record, &discover, create)?
                 )?),
-            Self::DeletePrivate(_, discover, delete) =>
+            Self::DeletePrivate(discover, delete) =>
                 DwnRequest::DeletePrivate(SignedObject::from_key(&delete, discover)?),
-            Self::CreatePublic(_, record, signer) =>
+            Self::CreatePublic(record, signer) =>
                 DwnRequest::CreatePublic(record.into_item(signer)?),
-            Self::ReadPublic(_, filters, sort_options) =>
-                DwnRequest::ReadPublic(filters, sort_options),
-            Self::UpdatePublic(_, record, signer) =>
+            Self::UpdatePublic(record, signer) =>
                 DwnRequest::UpdatePublic(record.into_item(signer)?),
-            Self::DeletePublic(_, uuid, signer) =>
+            Self::DeletePublic(uuid, signer) =>
                 DwnRequest::DeletePublic(SignedObject::new(signer, uuid)?),
-            Self::CreateDM(_, perms, signer, com_key) =>
+            Self::CreateDM(perms, signer, com_key) =>
                 DwnRequest::CreateDM(Self::create_dm_request(signer, com_key, *perms)?)
         })
     }
 
     pub fn create_private(
-        priority: usize,
         perms: PermissionSet,
         p_opts: Option<&PermissionOptions>,
         protocol: &Protocol,
@@ -167,11 +183,10 @@ impl AgentRequest {
         let create = perms.create()?;
         let subset_perms = protocol.subset_permission(perms, p_opts)?;
         let pr = PrivateRecord::new(subset_perms, protocol.uuid(), payload);
-        Ok(AgentRequest::CreatePrivate(priority, Box::new(pr), discover, create))
+        Ok(Self::CreatePrivate(Box::new(pr), discover, create))
     }
 
     pub fn create_private_child(
-        priority: usize,
         parent_perms: &PermissionSet,
         child_perms: &PermissionSet,
         index: usize
@@ -182,104 +197,78 @@ impl AgentRequest {
         let create = perms.create()?;
         let subset = protocol.subset_permission(perms, None)?;
         let pr = PrivateRecord::new(subset, protocol.uuid(), serde_json::to_vec(&child_perms)?);
-        Ok(AgentRequest::CreatePrivate(priority, Box::new(pr), discover, create))
-    }
-
-    pub fn read_private(
-        discover: SecretKey
-    ) -> Result<Self, Error> {
-        Ok(AgentRequest::ReadPrivate(discover))
+        Ok(Self::CreatePrivate(Box::new(pr), discover, create))
     }
 
     pub fn update_private(
-        priority: usize,
         perms: PermissionSet,
         p_opts: Option<&PermissionOptions>,
         protocol: &Protocol,
         payload: Vec<u8>
     ) -> Result<Self, Error> {
         let delete = perms.delete()?;
-        let req = Self::create_private(priority, perms, p_opts, protocol, payload)?;
-        if let AgentRequest::CreatePrivate(priority, pr, discover, create) = req {
-            Ok(AgentRequest::UpdatePrivate(priority, pr, discover, create, delete))
+        let req = Self::create_private(perms, p_opts, protocol, payload)?;
+        if let Self::CreatePrivate(pr, discover, create) = req {
+            Ok(Self::UpdatePrivate(pr, discover, create, delete))
         } else {panic!("Impossible");}
     }
 
     pub fn update_index(perms: PermissionSet, index: usize) -> Result<Self, Error> {
-        Self::update_private(index, perms, None, &SystemProtocols::usize(), serde_json::to_vec(&index)?)
+        Self::update_private(perms, None, &SystemProtocols::usize(), serde_json::to_vec(&index)?)
     }
 
-    pub fn delete_private(
-        priority: usize,
-        perms: &PermissionSet
-    ) -> Result<AgentRequest, Error> {
-        Ok(AgentRequest::DeletePrivate(priority, perms.discover.public_key(), perms.delete()?))
+    pub fn delete_private(perms: &PermissionSet) -> Result<Self, Error> {
+        Ok(Self::DeletePrivate(perms.discover.public_key(), perms.delete()?))
     }
 
     pub fn create_public(
-        priority: usize, record: PublicRecord, signer: Signer
-    ) -> Result<AgentRequest, Error> {
-        Ok(AgentRequest::CreatePublic(priority, Box::new(record), signer))
+        record: PublicRecord, signer: Signer
+    ) -> Result<Self, Error> {
+        Ok(Self::CreatePublic(Box::new(record), signer))
     }
 
-    pub fn read_public(
-        filters: Filters, sort_options: Option<SortOptions>
-    ) -> Result<AgentRequest, Error> {
-        Ok(AgentRequest::ReadPublic(Uuid::new_v4(), filters, sort_options))
-    }
     pub fn update_public(
-        priority: usize, record: PublicRecord, signer: Signer
-    ) -> Result<AgentRequest, Error> {
-        Ok(AgentRequest::UpdatePublic(priority, Box::new(record), signer))
+        record: PublicRecord, signer: Signer
+    ) -> Result<Self, Error> {
+        Ok(Self::UpdatePublic(Box::new(record), signer))
     }
 
-    pub fn delete_public(
-        priority: usize, uuid: Uuid, signer: Signer
-    ) -> Result<AgentRequest, Error> {
-        Ok(AgentRequest::DeletePublic(priority, uuid, signer))
+    pub fn delete_public(uuid: Uuid, signer: Signer) -> Result<Self, Error> {
+        Ok(Self::DeletePublic(uuid, signer))
     }
 
     pub fn create_dm(
         perms: PermissionSet, signer: Signer, com_key: PublicKey
-    ) -> Result<AgentRequest, Error> {
-        Ok(AgentRequest::CreateDM(Uuid::new_v4(), Box::new(perms), signer, com_key))
+    ) -> Result<Self, Error> {
+        Ok(Self::CreateDM(Box::new(perms), signer, com_key))
     }
 }
 
 pub enum Task<'a> {
-    Ready(Endpoint, BoxCommand<'a>),
-    Request(Endpoint, AgentRequest),
-    Waiting(Endpoint, BoxCallback<'a>, Vec<Uuid>),
+    Ready(Header, BoxCommand<'a>),
+    Waiting(Header, BoxCallback<'a>, Vec<Uuid>),
+    Request(Header, AgentRequest),
+    MutableRequest(Header, MutableAgentRequest, usize),
     Completed(BoxResponse),
 }
 
-
-//  impl<'a> std::fmt::Debug for Task<'a> {
-//      fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//          match self {
-//              Task::Ready(ep, c) => write!(f, "Task::Ready({:?}, {:?})", ep, c),
-//              Task::Request(ep, r) => write!(f, "Task::Request({:?}, {:?})", ep, r.truncate_debug()),
-//              Task::Waiting(ep, cb, ids) => write!(f, "Task::Waiting({:?}, {:?})", ep, ids),
-//              Task::Completed(res) => write!(f, "Task::Completed({:?})", res),
-//          }
-//      }
-//  }
-
 impl<'a> Task<'a> {
-    pub fn ready(endpoint: Endpoint, command: (impl Command<'a> + 'a)) -> Task<'a> {
-        Task::Ready(endpoint, Box::new(command))
+    pub fn ready(header: Header, command: (impl Command<'a> + 'a)) -> Task<'a> {
+        Task::Ready(header, Box::new(command))
     }
-    pub fn next(uuid: Uuid, endpoint: Endpoint, command: (impl Command<'a> + 'a)) -> Result<Tasks<'a>, Error> {
-        Ok(vec![(uuid, Task::ready(endpoint, command))])
+
+    pub fn next(uuid: Uuid, header: Header, command: (impl Command<'a> + 'a)) -> Result<Tasks<'a>, Error> {
+        Ok(vec![(uuid, Task::ready(header, command))])
     }
+
     pub fn waiting(
-        uuid: Uuid, endpoint: Endpoint, callback: BoxCallback<'a>, tasks: Vec<Task<'a>>
+        uuid: Uuid, header: Header, callback: BoxCallback<'a>, tasks: Vec<Task<'a>>
     ) -> Result<Tasks<'a>, Error> {
         let mut tasks = tasks.into_iter().map(|task| {
             (Uuid::new_v4(), task)
         }).collect::<VecDeque<_>>();
         let ids = tasks.iter().map(|(id,_)| *id).collect::<Vec<_>>();
-        tasks.push_front((uuid, Task::Waiting(endpoint, Box::new(callback), ids)));
+        tasks.push_front((uuid, Task::Waiting(header, Box::new(callback), ids)));
         Ok(tasks.into())
     }
     pub fn completed(uuid: Uuid, response: impl Response) -> Result<Tasks<'a>, Error> {

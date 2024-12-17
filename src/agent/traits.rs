@@ -1,6 +1,6 @@
 use super::Error;
 
-use super::structs::{Tasks, Task};
+use super::structs::{Header, Tasks, Task};
 use super::compiler::CompilerMemory;
 
 use crate::dids::{DidResolver, Endpoint, Did};
@@ -15,7 +15,7 @@ use uuid::Uuid;
 #[async_trait::async_trait]
 pub trait Command<'a>: TypeDebug + std::fmt::Debug + Serialize + Send + Sync + DynClone {
     async fn process(
-        self: Box<Self>, uuid: Uuid, ep: Endpoint, memory: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header, memory: &mut CompilerMemory<'a>
     ) -> Result<Vec<(Uuid, Task<'a>)>, Error>;
 
     fn serialize(&self) -> String {
@@ -49,17 +49,16 @@ pub trait TypeDebug: std::fmt::Debug {
     fn get_type(&self) -> String {
         let full_type = self.get_full_type();
         let split = full_type.split("::").collect::<Vec<_>>();
-        split[split.len()-1].to_string().replace(">", "")
+        split[split.len()-1].to_string().replace(">", "").replace("<", "")
     }
 
-    fn debug(&self) -> String {
-        format!("{}::{:?}", self.get_type(), self)
+    fn debug(&self, len: usize) -> String {
+        format!("{}::{}", self.get_type(), self.truncate_debug(len))
     }
 
-    fn truncate_debug(&self) -> String {
+    fn truncate_debug(&self, len: usize) -> String {
         let debug = format!("{:?}", self);
-        let debug = if debug.len() > 100 {&debug[..100]} else {&debug};
-        format!("{}::{}", self.get_type(), debug)
+        if debug.len() > len {debug[..len].to_string()} else {debug}
     }
 }
 

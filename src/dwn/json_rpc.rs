@@ -6,8 +6,6 @@ use crate::dids::Did;
 
 use super::Dwn;
 
-use std::collections::BTreeMap;
-
 use jsonrpc_v2::{Data, Params, Server as JsonServer};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -15,7 +13,7 @@ use url::Url;
 
 #[jsonrpc_client::api]
 trait Method {
-    async fn process_packet(&self, recipient: Did, payload: Vec<u8>) -> BTreeMap<Uuid, DwnResponse>;
+    async fn process_packet(&self, recipient: Did, payload: Vec<u8>) -> Vec<(Uuid, DwnResponse)>;
     async fn debug(&self) -> String;
 }
 
@@ -55,7 +53,7 @@ pub struct JsonRpcServer {}
 impl JsonRpcServer {
     async fn process_packet(
         data: Data<Mutex<Dwn>>, Params(params): Params<Packet>
-    ) -> Result<BTreeMap<Uuid, DwnResponse>, Error> {
+    ) -> Result<Vec<(Uuid, DwnResponse)>, Error> {
         data.lock().await.process_packet(params).await
     }
 

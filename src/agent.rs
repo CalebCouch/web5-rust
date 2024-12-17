@@ -6,8 +6,8 @@ pub mod structs;
 pub mod traits;
 
 pub mod compiler;
-pub mod scripts;
 pub mod commands;
+pub mod scripts;
 
 use protocol::{SystemProtocols, Protocol};
 use structs::PathedKey;
@@ -32,6 +32,8 @@ use std::collections::BTreeMap;
 
 use simple_crypto::SecretKey;
 
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc;
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 
@@ -162,6 +164,7 @@ impl Agent {
         CompilerMemory{
             did_resolver: &*self.did_resolver,
             record_info: BTreeMap::default(),
+            update_index: 0,
             create_index: BTreeMap::default(),
             protocols: &self.protocols,
             sig_key: &self.agent_key.sig_key,
@@ -170,6 +173,16 @@ impl Agent {
     }
 
     pub fn new_compiler<'a>(&'a self, mem: CompilerMemory<'a>) -> Compiler<'a> {
-        Compiler::<'a>::new(mem, &self.router, &*self.did_resolver, self.tenant().clone())
+        Compiler::<'a>::new(mem, &self.router, self.tenant().clone())
     }
+
+//  pub async fn new_listener(&self, mem: Option<CompilerMemory<'a>) -> Sender<({
+//      let (tx, mut rx) = mpsc::channel::<CommandChannel>(100);
+//      tokio::spawn(async {
+
+//      });
+//      Ok(tx)
+//  }
 }
+
+//pub type CommandChannel = Option<(impl Command<'a> + 'a + Clone, Option<Vec<Did>>)>;

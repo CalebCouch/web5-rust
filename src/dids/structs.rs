@@ -14,7 +14,7 @@ use url::Url;
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 
-#[derive(Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct Endpoint(pub Did, pub Url);
 
 impl std::fmt::Debug for Endpoint {
