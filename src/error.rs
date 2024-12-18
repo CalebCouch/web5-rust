@@ -97,7 +97,7 @@ impl Error {
         Error::Validation{message: msg.to_string(), backtrace: get_backtrace()}
     }
 
-    pub fn multi(errors: Vec<Box<crate::agent::structs::ErrorWrapper>>) -> Self {
+    pub fn multi(errors: Vec<Box<std::sync::Arc<Self>>>) -> Self {
         errors.into()
     }
 
@@ -114,18 +114,18 @@ impl Error {
     }
 }
 
-impl From<Vec<Box<crate::agent::structs::ErrorWrapper>>> for Error {
-    fn from(mut errors: Vec<Box<crate::agent::structs::ErrorWrapper>>) -> Error {
+impl From<Vec<Box<std::sync::Arc<Error>>>> for Error {
+    fn from(mut errors: Vec<Box<std::sync::Arc<Error>>>) -> Error {
         if errors.len() > 1 {
-            Error::Multi{errors: errors.into_iter().map(|err| Error::arc((err).inner)).collect::<Vec<_>>()}
+            Error::Multi{errors: errors.into_iter().map(|err| Error::arc(*err)).collect::<Vec<_>>()}
         } else {
-            Error::arc((errors.remove(0)).inner)
+            Error::arc(*errors.remove(0))
         }
     }
 }
 
-impl From<Box<dyn crate::agent::traits::Response>> for Error {
-    fn from(r: Box<dyn crate::agent::traits::Response>) -> Error {
+impl From<Box<dyn crate::agent::Response>> for Error {
+    fn from(r: Box<dyn crate::agent::Response>) -> Error {
         Error::FailedDowncast{
             message: format!("Tried to downcast {:?}: {} into something else", r, (*r).get_full_type()),
             backtrace: get_backtrace()

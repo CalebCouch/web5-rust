@@ -1,6 +1,6 @@
 use super::Error;
 
-use super::compiler::CompilerMemory;
+use super::compiler::{CompilerMemory, CompilerCache};
 use super::permission::{PermissionOptions, PermissionSet};
 use super::protocol::{SystemProtocols, Protocol};
 use super::traits::Command;
@@ -23,10 +23,9 @@ use crate::dids::{DidResolver, Endpoint, Did};
 use crate::dwn::structs::DwnResponse;
 
 use simple_crypto::SecretKey;
-use serde::Serialize;
 use uuid::Uuid;
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct EnsureEmpty {
     responses: Responses
 }
@@ -40,7 +39,8 @@ impl EnsureEmpty {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for EnsureEmpty {
     async fn process(
-        self: Box<Self>, uuid: Uuid, _: Header, _: &mut CompilerMemory
+        self: Box<Self>, uuid: Uuid, _: Header,
+        _: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         for response in self.responses {
             if response.downcast_ref::<()>().is_some() {} else {
@@ -51,38 +51,39 @@ impl<'a> Command<'a> for EnsureEmpty {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct CreatePrivate {}
 impl CreatePrivate {
     pub fn create(
-        header: Header, mem: &mut CompilerMemory, record: Record, p_opts: Option<&PermissionOptions>
+        header: Header, memory: &mut CompilerMemory, cache: &mut CompilerCache,
+        record: Record, p_opts: Option<&PermissionOptions>
     ) -> Result<(PermissionSet, MutableAgentRequest), Error> {
-        let protocol = mem.get_protocol(&record.protocol)?.clone();
-        let perms = mem.key.get_perms(&record.path, Some(&protocol))?;
+        let protocol = memory.get_protocol(&record.protocol)?.clone();
+        let perms = memory.key.get_perms(&record.path, Some(&protocol))?;
         let min_perms = protocol.subset_permission(perms.clone(), None)?;
         let req = MutableAgentRequest::create_private(perms.clone(), p_opts, &protocol, record.payload)?;
 
-        mem.record_info.insert((header.1, record.path.clone()), (protocol, perms));
+        cache.record_info.insert((header.1, record.path.clone()), (protocol, perms));
 
         Ok((min_perms, req))
     }
 
     pub fn create_child(
-        header: Header, mem: &mut CompilerMemory,
+        header: Header, memory: &mut CompilerMemory,
         parent_perms: &PermissionSet, child_perms: &PermissionSet, index: usize
     ) -> Result<(MutableAgentRequest, MutableAgentRequest, usize), Error> {
         let index_key = (header.1, parent_perms.path.clone());
-        let index = mem.create_index.get(&index_key).copied().unwrap_or(index);
-        mem.create_index.insert(index_key, index+1);
+        let index = memory.create_index.get(&index_key).copied().unwrap_or(index);
+        memory.create_index.insert(index_key, index+1);
 
-        let index_perms = mem.key.get_perms(&parent_perms.path.index(), None)?;
+        let index_perms = memory.key.get_perms(&parent_perms.path.index(), None)?;
         let index_req = MutableAgentRequest::update_index(index_perms, index+1)?;
         let child_req = MutableAgentRequest::create_private_child(parent_perms, child_perms, index)?;
         Ok((index_req, child_req, index+1))
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum ReadPrivate {
     #[allow(non_camel_case_types)]
     child(RecordPath, usize),
@@ -97,7 +98,7 @@ pub enum ReadPrivate {
 
 impl ReadPrivate {
     fn read_private(
-        perms: &PermissionSet, mem: &CompilerMemory, response: &DwnResponse
+        perms: &PermissionSet, memory: &CompilerMemory, response: &DwnResponse
     ) -> Result<(Option<PrivateRecord>, bool), Error> {
         let discover = perms.discover.public_key();
         let create = perms.create.public_key();
@@ -108,7 +109,7 @@ impl ReadPrivate {
                 let dc = read.decrypt(&item.payload)?;
                 let signed = serde_json::from_slice::<SignedObject<PrivateRecord>>(&dc)?;
                 let mut record = signed.verify_with_key(&create)?;
-                let protocol = mem.get_protocol(&record.protocol)?;
+                let protocol = memory.get_protocol(&record.protocol)?;
                 let perms = protocol.trim_permission(perms.clone());
                 let delete = perms.delete.as_ref().map(|d| d.public_key());
                 perms.validate(&record.perms)?;
@@ -127,7 +128,8 @@ impl ReadPrivate {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for ReadPrivate {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, cache: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::child(parent_path, index) => {
@@ -153,10 +155,10 @@ impl<'a> Command<'a> for ReadPrivate {
                 if path.is_empty() {
                     let protocol = SystemProtocols::root();
                     Task::completed(uuid, (Some(Box::new(
-                        PrivateRecord::new(mem.key.get_perms_from_slice(&[], Some(&protocol))?, protocol.uuid(), Vec::new())
+                        PrivateRecord::new(memory.key.get_perms_from_slice(&[], Some(&protocol))?, protocol.uuid(), Vec::new())
                     )), true))
                 } else {
-                    let perms = mem.key.get_perms(&path, None)?;
+                    let perms = memory.key.get_perms(&path, None)?;
                     Task::next(uuid, header, Self::new(Box::new(perms), true))
                 }
             },
@@ -169,7 +171,7 @@ impl<'a> Command<'a> for ReadPrivate {
             }
             Self::Complete(mut results, perms, resolve, exists) => {
                 let res = results.remove(0).downcast::<DwnResponse>()?;
-                let record = if let Ok((record, nexists)) = Self::read_private(&perms, mem, &res) {
+                let record = if let Ok((record, nexists)) = Self::read_private(&perms, memory, &res) {
                     let exists = exists || nexists;
                     if let Some(record) = record {
                         if resolve && record.protocol == SystemProtocols::perm_pointer().uuid() {
@@ -180,8 +182,8 @@ impl<'a> Command<'a> for ReadPrivate {
                                 Task::Request(header, req)
                             ]);
                         }
-                        if let Ok(protocol) = mem.get_protocol(&record.protocol) {
-                            mem.record_info.insert(
+                        if let Ok(protocol) = memory.get_protocol(&record.protocol) {
+                            cache.record_info.insert(
                                 (header.1.clone(), perms.path.clone()),
                                 (protocol.clone(), record.perms.clone())
                             );
@@ -195,7 +197,7 @@ impl<'a> Command<'a> for ReadPrivate {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum ReadInfo {
     #[allow(non_camel_case_types)]
     new(RecordPath, PermissionOptions),
@@ -205,11 +207,12 @@ pub enum ReadInfo {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for ReadInfo {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, cache: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::new(path, p_opts) => {
-                match mem.record_info.get(&(header.1.clone(), path.clone())) {
+                match cache.record_info.get(&(header.1.clone(), path.clone())) {
                     Some(info) if info.clone().1.subset(&p_opts).is_ok() => {
                         Task::completed(uuid, info.clone())
                     },
@@ -223,14 +226,14 @@ impl<'a> Command<'a> for ReadInfo {
             Self::Complete(mut results) => {
                 let record = results.remove(0).downcast::<(Option<Box<PrivateRecord>>, bool)>()?.0;
                 if let Some(record) = record {
-                    Task::completed(uuid, (mem.get_protocol(&record.protocol)?.clone(), record.perms))
+                    Task::completed(uuid, (memory.get_protocol(&record.protocol)?.clone(), record.perms))
                 } else {Err(Error::not_found("Record information"))}
             },
         }
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct ReadParent {
     path: RecordPath,
 }
@@ -244,22 +247,23 @@ impl ReadParent {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for ReadParent {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         let parent_path = self.path.parent()?;
         if parent_path.is_empty() {
             let protocol = SystemProtocols::root();
             Task::completed(uuid, Some(Box::new(
-                PrivateRecord::new(mem.key.get_perms_from_slice(&[], Some(&protocol))?, protocol.uuid(), Vec::new())
+                PrivateRecord::new(memory.key.get_perms_from_slice(&[], Some(&protocol))?, protocol.uuid(), Vec::new())
             )))
         } else {
-            let perms = mem.key.get_perms(&parent_path, None)?;
+            let perms = memory.key.get_perms(&parent_path, None)?;
             Task::next(uuid, header, ReadPrivate::new(Box::new(perms), true))
         }
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct NextIndex {
     discover_child: SecretKey,
     index: usize,
@@ -279,7 +283,8 @@ impl NextIndex {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for NextIndex {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, _: &mut CompilerMemory
+        self: Box<Self>, uuid: Uuid, header: Header,
+        _: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         let discover_child = self.discover_child;
         let mut index = self.index;
@@ -298,7 +303,7 @@ impl<'a> Command<'a> for NextIndex {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum Exists {
     #[allow(non_camel_case_types)]
     path(RecordPath),
@@ -310,11 +315,12 @@ pub enum Exists {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for Exists {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::path(path) => {
-                let discover = mem.key.get_perms(&path, None)?.discover();
+                let discover = memory.key.get_perms(&path, None)?.discover();
                 Task::next(uuid, header, Self::new(discover))
             },
             Self::new(key) => {
@@ -331,7 +337,7 @@ impl<'a> Command<'a> for Exists {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum ReadIndex {
     #[allow(non_camel_case_types)]
     new(RecordPath),
@@ -341,11 +347,12 @@ pub enum ReadIndex {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for ReadIndex {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::new(path) => {
-                let perms = mem.key.get_perms(&path.index(), Some(&SystemProtocols::usize()))?;
+                let perms = memory.key.get_perms(&path.index(), Some(&SystemProtocols::usize()))?;
                 Task::waiting(uuid, header.clone(), Callback::new(Self::Complete), vec![
                     Task::ready(header, ReadPrivate::new(Box::new(perms), false))
                 ])
@@ -361,7 +368,7 @@ impl<'a> Command<'a> for ReadIndex {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct CreateDM {
     perms: PermissionSet,
     recipient: Did,
@@ -376,10 +383,11 @@ impl CreateDM {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for CreateDM {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
-        let signer = Signer::Left(mem.sig_key.clone());
-        let (_, com_key) = mem.did_resolver.resolve_dwn_keys(&self.recipient).await?;
+        let signer = Signer::Left(memory.sig_key.clone());
+        let (_, com_key) = memory.did_resolver.resolve_dwn_keys(&self.recipient).await?;
         Task::waiting(uuid, header.clone(), Callback::new(EnsureEmpty::new), vec![
             Task::MutableRequest(header, MutableAgentRequest::create_dm(self.perms, signer, com_key)?, 0)
         ])
@@ -394,7 +402,7 @@ impl<'a> Command<'a> for CreateDM {
     }
 }
 
-//  #[derive(Serialize, Debug, Clone)]
+//  #[derive(Debug, Clone)]
 //  pub struct ReadDM {
 //      timestamp: DateTime<Utc>
 //  }
@@ -418,7 +426,7 @@ impl<'a> Command<'a> for CreateDM {
 //      }
 //  }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum Scan {
     #[allow(non_camel_case_types)]
     new(RecordPath, usize),
@@ -428,7 +436,8 @@ pub enum Scan {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for Scan {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, _: &mut CompilerMemory
+        self: Box<Self>, uuid: Uuid, header: Header,
+        _: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::new(path, start) => {

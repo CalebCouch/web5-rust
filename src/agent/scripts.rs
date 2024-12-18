@@ -1,6 +1,6 @@
 use super::Error;
 
-use super::compiler::CompilerMemory;
+use super::compiler::{CompilerMemory, CompilerCache};
 use super::permission::PermissionOptions;
 use super::traits::Command;
 use super::structs::{
@@ -18,17 +18,15 @@ use super::structs::{
 };
 use super::commands;
 
-use crate::dids::Endpoint;
 use crate::dids::signing::Signer;
 use crate::dwn::structs::{DwnResponse, PublicRecord};
 
-use simple_database::database::{Filters, SortOptions, Index};
+use simple_database::database::{Filters, SortOptions};
 use simple_database::Indexable;
 
-use serde::Serialize;
 use uuid::Uuid;
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum CreatePrivate<'a> {
     #[allow(non_camel_case_types)]
     new(Record, Option<&'a PermissionOptions>),
@@ -39,7 +37,8 @@ pub enum CreatePrivate<'a> {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for CreatePrivate<'a> {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, cache: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::new(record, p_opts) => {
@@ -84,8 +83,8 @@ impl<'a> Command<'a> for CreatePrivate<'a> {
                 let parent_protocol = &info.0;
                 parent_protocol.validate_child(&record.protocol)?;
 
-                let (min_perms, req) = commands::CreatePrivate::create(header.clone(), mem, record, p_opts)?;
-                let (i_req, c_req, index) = commands::CreatePrivate::create_child(header.clone(), mem, &info.1, &min_perms, index)?;
+                let (min_perms, req) = commands::CreatePrivate::create(header.clone(), memory, cache, record, p_opts)?;
+                let (i_req, c_req, index) = commands::CreatePrivate::create_child(header.clone(), memory, &info.1, &min_perms, index)?;
 
                 Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new), vec![
                     Task::MutableRequest(header.clone(), i_req, index),
@@ -98,7 +97,7 @@ impl<'a> Command<'a> for CreatePrivate<'a> {
 }
 
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum ReadPrivate {
     #[allow(non_camel_case_types)]
     new(RecordPath),
@@ -110,7 +109,8 @@ pub enum ReadPrivate {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for ReadPrivate {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, _: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        _: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::new(path) => {
@@ -131,7 +131,7 @@ impl<'a> Command<'a> for ReadPrivate {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum UpdatePrivate<'a> {
     #[allow(non_camel_case_types)]
     new(Record, Option<&'a PermissionOptions>),
@@ -141,7 +141,8 @@ pub enum UpdatePrivate<'a> {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for UpdatePrivate<'a> {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::new(record, p_opts) => {
@@ -159,11 +160,12 @@ impl<'a> Command<'a> for UpdatePrivate<'a> {
             Self::UpdateOrCreate(mut r, record, p_opts) => {
                 match *r.remove(2).downcast::<(Option<Box<PrivateRecord>>, bool)>()? {
                     (Some(e_record), _) => {
-                        let protocol = mem.get_protocol(&record.protocol)?;
+                        let protocol = memory.get_protocol(&record.protocol)?;
                         let perms = e_record.perms;
                         let req = MutableAgentRequest::update_private(perms.clone(), p_opts, protocol, record.payload)?;
+                        let order = header.2;
                         Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new),
-                            vec![Task::MutableRequest(header, req, 0)]
+                            vec![Task::MutableRequest(header, req, order)]
                         )
                     },
                     (None, exists) => {
@@ -176,7 +178,7 @@ impl<'a> Command<'a> for UpdatePrivate<'a> {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct DeletePrivate {
     path: RecordPath
 }
@@ -190,9 +192,10 @@ impl DeletePrivate {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for DeletePrivate {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
-        let perms = mem.key.get_perms(&self.path, None)?;
+        let perms = memory.key.get_perms(&self.path, None)?;
         let req = MutableAgentRequest::delete_private(&perms)?;
         Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new), vec![
             Task::MutableRequest(header, req, usize::MAX)
@@ -200,7 +203,7 @@ impl<'a> Command<'a> for DeletePrivate {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct CreatePublic {
     record: PublicRecord,
     signer: Option<Signer>,
@@ -215,11 +218,12 @@ impl CreatePublic {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for CreatePublic {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
-        let protocol = mem.get_protocol(&self.record.protocol)?;
+        let protocol = memory.get_protocol(&self.record.protocol)?;
         protocol.validate_payload(&self.record.payload)?;
-        let signer = self.signer.unwrap_or(Signer::Left(mem.sig_key.clone()));
+        let signer = self.signer.unwrap_or(Signer::Left(memory.sig_key.clone()));
         let req = MutableAgentRequest::create_public(self.record, signer)?;
         Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new), vec![
             Task::MutableRequest(header, req, 0)
@@ -227,7 +231,7 @@ impl<'a> Command<'a> for CreatePublic {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum ReadPublic {
     #[allow(non_camel_case_types)]
     new(Filters, Option<SortOptions>),
@@ -237,7 +241,8 @@ pub enum ReadPublic {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for ReadPublic {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::new(filters, sort_options) => {
@@ -255,10 +260,10 @@ impl<'a> Command<'a> for ReadPublic {
                         sort_options.sort(&mut records)?;
                     }
                     let records = futures::future::join_all(records.into_iter().map(|item| async {
-                        item.0.verify(mem.did_resolver, None).await.ok()?;
+                        item.0.verify(memory.did_resolver, None).await.ok()?;
                         if !filters.filter(&item.secondary_keys()) {return None;}
                         let record = item.0.unwrap();
-                        let protocol = mem.get_protocol(&record.protocol).ok()?;
+                        let protocol = memory.get_protocol(&record.protocol).ok()?;
                         protocol.validate_payload(&record.payload).ok()?;
                         Some(record)
                     })).await;
@@ -270,7 +275,7 @@ impl<'a> Command<'a> for ReadPublic {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct UpdatePublic {
     record: PublicRecord,
     signer: Option<Signer>,
@@ -285,11 +290,12 @@ impl UpdatePublic {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for UpdatePublic {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
-        let protocol = mem.get_protocol(&self.record.protocol)?;
+        let protocol = memory.get_protocol(&self.record.protocol)?;
         protocol.validate_payload(&self.record.payload)?;
-        let signer = self.signer.unwrap_or(Signer::Left(mem.sig_key.clone()));
+        let signer = self.signer.unwrap_or(Signer::Left(memory.sig_key.clone()));
         let req = MutableAgentRequest::update_public(self.record, signer)?;
         Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new), vec![
             Task::MutableRequest(header, req, 0)
@@ -297,7 +303,7 @@ impl<'a> Command<'a> for UpdatePublic {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct DeletePublic {
     uuid: Uuid,
     signer: Option<Signer>
@@ -312,9 +318,10 @@ impl DeletePublic {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for DeletePublic {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, mem: &mut CompilerMemory<'a>
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
-        let signer = self.signer.unwrap_or(Signer::Left(mem.sig_key.clone()));
+        let signer = self.signer.unwrap_or(Signer::Left(memory.sig_key.clone()));
         let req = MutableAgentRequest::delete_public(self.uuid, signer)?;
         Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new), vec![
             Task::MutableRequest(header, req, usize::MAX)
@@ -322,7 +329,7 @@ impl<'a> Command<'a> for DeletePublic {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum Scan {
     #[allow(non_camel_case_types)]
     new(RecordPath, usize),
@@ -332,7 +339,8 @@ pub enum Scan {
 #[async_trait::async_trait]
 impl<'a> Command<'a> for Scan {
     async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header, _: &mut CompilerMemory
+        self: Box<Self>, uuid: Uuid, header: Header,
+        _: &mut CompilerMemory<'a>, _: &mut CompilerCache
     ) -> Result<Tasks<'a>, Error> {
         match *self {
             Self::new(path, start) => {

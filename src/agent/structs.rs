@@ -13,15 +13,13 @@ use crate::dids::Endpoint;
 use crate::dwn::structs::{DwnRequest, DwnItem, PublicRecord};
 
 use std::collections::{VecDeque, BTreeMap};
-use std::sync::Arc;
 
 use simple_crypto::{Hashable, SecretKey, PublicKey, Key};
 use simple_database::database::{Filters, SortOptions};
 
-use serde::{Serializer, Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 use schemars::JsonSchema;
 use uuid::Uuid;
-use rand::Fill;
 
 use super::traits::TypeDebug;
 
@@ -36,7 +34,7 @@ pub type Responses = Vec<Box<dyn Response>>;
 pub type BoxResponse = Box<dyn Response>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Header(pub Uuid, pub Endpoint);
+pub struct Header(pub Uuid, pub Endpoint, pub usize);
 
 #[derive(JsonSchema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct RecordPath {
@@ -391,27 +389,5 @@ impl PathedKey {
         if let Some(protocol) = protocol {
             Ok(protocol.trim_permission(perms))
         } else {Ok(perms)}
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ErrorWrapper {
-    pub inner: Arc<Error>
-}
-
-impl ErrorWrapper {
-    pub fn new(error: Error) -> Self {
-        ErrorWrapper{inner: Arc::new(error)}
-    }
-}
-
-impl Serialize for ErrorWrapper {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut buffer: [u8; 32] = [0; 32];
-        buffer.try_fill(&mut rand::thread_rng()).unwrap();
-        serializer.serialize_bytes(&buffer)
     }
 }

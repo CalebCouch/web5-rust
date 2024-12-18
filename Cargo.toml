@@ -1,6 +1,6 @@
 [package]
 name = "web5-rust"
-version = "2.0.0-beta10"
+version = "2.0.0-beta11"
 edition = "2021"
 description = "A rust crate for interacting with Web5"
 license = "BSD-3-Clause"
@@ -56,4 +56,8 @@ itertools = "0.13.0"
 snafu = { version = "0.8.5", features = ["backtrace"] }
 
 [features]
+default = ["agent"]
 leveldb = ["dep:leveldb"]
+agent = []
+dwn = []
+advanced = ["agent"]

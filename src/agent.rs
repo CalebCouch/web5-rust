@@ -1,17 +1,35 @@
 use super::error::Error;
 
-pub mod permission;
-pub mod protocol;
-pub mod structs;
-pub mod traits;
+mod permission;
+pub use permission::{PermissionOptions, ChannelPermissionOptions};
+mod protocol;
+pub use protocol::{Protocol, ChannelProtocol};
+mod structs;
+pub use structs::{Record, RecordPath};
+mod traits;
+pub use traits::Response;
 
 pub mod compiler;
-pub mod commands;
 pub mod scripts;
 
-use protocol::{SystemProtocols, Protocol};
+#[cfg(not(feature = "advanced"))]
+mod commands;
+
+#[cfg(feature = "advanced")]
+pub mod commands;
+
+#[cfg(feature = "advanced")]
+pub mod custom_commands {
+    pub use super::traits::Command;
+    pub use super::structs::Header;
+    pub use uuid::Uuid;
+    pub use super::compiler::{CompilerMemory, CompilerCache};
+}
+
+use protocol::{SystemProtocols};
+use compiler::{Compiler, CompilerCache};
 use structs::PathedKey;
-use compiler::{Compiler, CompilerMemory};
+use traits::Command;
 
 use crate::ed25519::SecretKey as EdSecretKey;
 
@@ -32,8 +50,6 @@ use std::collections::BTreeMap;
 
 use simple_crypto::SecretKey;
 
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::mpsc;
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 
@@ -160,29 +176,28 @@ impl Agent {
 
     pub fn tenant(&self) -> &Did {&self.agent_key.sig_key.public.did}
 
-    pub fn new_compiler_memory(&self) -> CompilerMemory {
-        CompilerMemory{
-            did_resolver: &*self.did_resolver,
-            record_info: BTreeMap::default(),
-            update_index: 0,
-            create_index: BTreeMap::default(),
-            protocols: &self.protocols,
-            sig_key: &self.agent_key.sig_key,
-            key: &self.agent_key.enc_key,
+    #[cfg(feature = "advanced")]
+    pub fn new_compiler<'a>(&'a self, cache: &'a mut CompilerCache) -> Compiler<'a> {
+        self.internal_new_compiler(cache)
+    }
+
+    fn internal_new_compiler<'a>(&'a self, cache: &'a mut CompilerCache) -> Compiler<'a> {
+        Compiler::<'a>::new(
+            cache,
+            &*self.did_resolver,
+            &self.protocols,
+            &self.agent_key.sig_key,
+            &self.agent_key.enc_key,
+            &self.router,
+            self.tenant().clone()
+        )
+    }
+
+    pub async fn process_commands<'a>(&'a self, cache: &'a mut CompilerCache, commands: Vec<Box<impl Command<'a> + Clone + 'a>>) -> Result<Vec<Box<dyn Response>>, Error> {
+        let mut comp = self.internal_new_compiler(cache);
+        for command in commands.into_iter() {
+            comp.add_command(*command, None).await?;
         }
+        Ok(comp.compile().await.remove(0))
     }
-
-    pub fn new_compiler<'a>(&'a self, mem: CompilerMemory<'a>) -> Compiler<'a> {
-        Compiler::<'a>::new(mem, &self.router, self.tenant().clone())
-    }
-
-//  pub async fn new_listener(&self, mem: Option<CompilerMemory<'a>) -> Sender<({
-//      let (tx, mut rx) = mpsc::channel::<CommandChannel>(100);
-//      tokio::spawn(async {
-
-//      });
-//      Ok(tx)
-//  }
 }
-
-//pub type CommandChannel = Option<(impl Command<'a> + 'a + Clone, Option<Vec<Did>>)>;

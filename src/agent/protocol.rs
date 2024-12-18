@@ -129,28 +129,6 @@ impl SystemProtocols {
             Self::root(),
         ]
     }
-  //pub fn get_map() -> BTreeMap<Hash, Protocol> {
-  //    let dm = Self::dms_channel();
-  //    let ak = Self::agent_keys();
-  //    let dt = Self::date_time();
-  //    let us = Self::usize();
-  //    let ci = Self::channel_item();
-  //    let sp = Self::shared_pointer();
-  //    let pp = Self::perm_pointer();
-  //    let p = Self::pointer();
-  //    let r = Self::root();
-  //    BTreeMap::from([
-  //        (dm.hash(), dm),
-  //        (ak.hash(), ak),
-  //        (dt.hash(), dt),
-  //        (us.hash(), us),
-  //        (ci.hash(), ci),
-  //        (sp.hash(), sp),
-  //        (pp.hash(), pp),
-  //        (p.hash(), p),
-  //        (r.hash(), r),
-  //    ])
-  //}
 
     pub fn root() -> Protocol {
         Protocol::new(
@@ -164,17 +142,17 @@ impl SystemProtocols {
         ).unwrap()
     }
 
-    pub fn protocol_folder(protocol: Uuid) -> Protocol {
-        Protocol::new(
-            &format!("protocol_folder: {}", hex::encode(protocol.as_bytes())),
-            false,
-            PermissionOptions::new(false, false, false, Some(
-                ChannelPermissionOptions::new(false, false)
-            )),
-            None,//Some(serde_json::to_string(&schema_for!(Protocol)).unwrap()),
-            Some(ChannelProtocol{child_protocols: Some(vec![protocol])})
-        ).unwrap()
-    }
+  //pub fn protocol_folder(protocol: Uuid) -> Protocol {
+  //    Protocol::new(
+  //        &format!("protocol_folder: {}", hex::encode(protocol.as_bytes())),
+  //        false,
+  //        PermissionOptions::new(false, false, false, Some(
+  //            ChannelPermissionOptions::new(false, false)
+  //        )),
+  //        None,//Some(serde_json::to_string(&schema_for!(Protocol)).unwrap()),
+  //        Some(ChannelProtocol{child_protocols: Some(vec![protocol])})
+  //    ).unwrap()
+  //}
 
     pub fn dms_channel() -> Protocol {
         Protocol::new(

@@ -5,7 +5,6 @@ use super::permission::PermissionSet;
 use super::traits::{Response, Command};
 use super::structs::{
     MutableAgentRequest,
-    ErrorWrapper,
     AgentRequest,
     BoxResponse,
     BoxCallback,
@@ -25,15 +24,11 @@ use crate::dwn::router::Router;
 use crate::dids::{DidResolver, DidKeyPair, Endpoint, Did};
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use simple_crypto::PublicKey;
-
-use serde::Serialize;
 use uuid::Uuid;
 
-use super::traits::TypeDebug;
-
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 struct Complete {
     response: Box<dyn Response>
 }
@@ -44,17 +39,22 @@ impl Complete {
 
 #[async_trait::async_trait]
 impl<'a> Command<'a> for Complete {
-    async fn process(mut self: Box<Self>, uuid: Uuid, _: Header, _: &mut CompilerMemory) -> Result<Tasks<'a>, Error> {
+    async fn process(mut self: Box<Self>, uuid: Uuid, _: Header, _: &mut CompilerMemory, _: &mut CompilerCache) -> Result<Tasks<'a>, Error> {
         Ok(vec![(uuid, Task::Completed(self.response))])
     }
 }
 
 #[derive(Debug)]
-pub struct CompilerMemory<'a> {
-    pub did_resolver: &'a dyn DidResolver,
+pub struct CompilerCache {
     pub record_info: BTreeMap<(Endpoint, RecordPath), (Protocol, PermissionSet)>,
-    pub update_index: usize,
+}
+
+#[derive(Debug)]
+pub struct CompilerMemory<'a> {
     pub create_index: BTreeMap<(Endpoint, RecordPath), usize>,
+
+    //Readonly
+    pub did_resolver: &'a dyn DidResolver,
     pub protocols: Protocols<'a>,
     pub sig_key: &'a DidKeyPair,
     pub key: &'a PathedKey,
@@ -83,10 +83,19 @@ pub struct Compiler<'a> {
     tenant: Did,
 
     memory: CompilerMemory<'a>,
+    cache: &'a mut CompilerCache
 }
 
 impl<'a> Compiler<'a> {
-    pub fn new(memory: CompilerMemory<'a>, router: &'a Router, tenant: Did) -> Self {
+    pub fn new(
+        cache: &'a mut CompilerCache,
+        did_resolver: &'a dyn DidResolver,
+        protocols: Protocols<'a>,
+        sig_key: &'a DidKeyPair,
+        key: &'a PathedKey,
+        router: &'a Router,
+        tenant: Did
+    ) -> Self {
         Compiler{
             original_requests: Some(Vec::new()),
             ready: Some(Vec::new()),
@@ -96,66 +105,74 @@ impl<'a> Compiler<'a> {
             completed: Some(BTreeMap::default()),
             router,
             tenant,
-            memory,
+            memory: CompilerMemory {
+                create_index: BTreeMap::default(),
+                did_resolver,
+                protocols,
+                sig_key,
+                key,
+            },
+            cache
         }
     }
 
     pub async fn add_command(&mut self, command: impl Command<'a> + 'a + Clone, dids: Option<Vec<Did>>) -> Result<(), Error> {
         let dids = dids.unwrap_or(vec![self.tenant.clone()]);
         let id = Uuid::new_v4();
+        let order = self.original_requests.as_ref().unwrap().len();
         self.original_requests.as_mut().unwrap().push(id);
         let endpoints = command.get_endpoints(dids, self.memory.did_resolver).await?;
         let ep = endpoints.first().unwrap().clone();
 
         let tasks = endpoints.into_iter().map(|ep|
-            Task::Ready(Header(id, ep), Box::new(command.clone()))
+            Task::Ready(Header(id, ep, order), Box::new(command.clone()))
         ).collect::<Vec<_>>();
-        let tasks = Task::waiting(id, Header(id, ep), Callback::new(Complete::new), tasks)?;
+        let tasks = Task::waiting(id, Header(id, ep, order), Callback::new(Complete::new), tasks)?;
         self.add_tasks(tasks);
         Ok(())
     }
 
 
-    fn print(&self) {
-        println!("Printing---------------------------------------");
-        println!("Ready: {:#?}", self.ready.as_ref().unwrap().iter().map(|(uuid, ep, v)|
-            (uuid, ep, (**v).debug(50))
-        ).collect::<Vec<_>>());
-        println!("Waiting: {:#?}", BTreeMap::from_iter(self.waiting.as_ref().unwrap().iter().map(|(uuid, _, _, ids)|
-            (uuid, ids.iter().map(|ouuid| format!("{}: {}", ouuid, self.what_is(ouuid))).collect::<Vec<_>>())
-        )));
-        println!("Requests: {:#?}", self.requests.as_ref().unwrap().iter().map(|(uuid, ep, req)|
-            (uuid, ep, req.truncate_debug(50))
-        ).collect::<Vec<_>>());
-         println!("Mutable Requests: {:#?}", self.mutable_requests.as_ref().unwrap().iter().map(|(uuid, ep, req, pri)|
-            (uuid, ep, req.get_id(), req, pri)
-        ).collect::<Vec<_>>());
+//  fn print(&self) {
+//      println!("Printing---------------------------------------");
+//      println!("Ready: {:#?}", self.ready.as_ref().unwrap().iter().map(|(uuid, ep, v)|
+//          (uuid, ep, (**v).debug(50))
+//      ).collect::<Vec<_>>());
+//      println!("Waiting: {:#?}", BTreeMap::from_iter(self.waiting.as_ref().unwrap().iter().map(|(uuid, _, _, ids)|
+//          (uuid, ids.iter().map(|ouuid| format!("{}: {}", ouuid, self.what_is(ouuid))).collect::<Vec<_>>())
+//      )));
+//      println!("Requests: {:#?}", self.requests.as_ref().unwrap().iter().map(|(uuid, ep, req)|
+//          (uuid, ep, req.truncate_debug(50))
+//      ).collect::<Vec<_>>());
+//       println!("Mutable Requests: {:#?}", self.mutable_requests.as_ref().unwrap().iter().map(|(uuid, ep, req, pri)|
+//          (uuid, ep, req.get_id(), req, pri)
+//      ).collect::<Vec<_>>());
 
-        println!("Completed: {:#?}", self.completed.as_ref().unwrap().iter().map(|(uuid, res)|
-            (uuid, res.debug(50))
-        ).collect::<Vec<_>>());
-    }
+//      println!("Completed: {:#?}", self.completed.as_ref().unwrap().iter().map(|(uuid, res)|
+//          (uuid, res.debug(50))
+//      ).collect::<Vec<_>>());
+//  }
 
-    fn what_is(&self, uuid: &Uuid) -> String {
-        if let Some((_, _, v)) = self.ready.as_ref().unwrap().iter().find(|(id, _, _)| id == uuid) {
-            return ((**v).debug(40));
-        }
-        if self.waiting.as_ref().unwrap().iter().find(|(id, _, _, _)| id == uuid).is_some() {
-            return "Waiting".to_string();
-        }
-        if self.requests.as_ref().unwrap().iter().find(|(id, _, _)| id == uuid).is_some() {
-            return "Request".to_string();
-        }
-        if self.mutable_requests.as_ref().unwrap().iter().find(|(id, _, _, _)| id == uuid).is_some() {
-            return "Mutable Request".to_string();
-        }
-        if self.completed.as_ref().unwrap().iter().find(|(id, _)| *id == uuid).is_some() {
-            return "completed".to_string();
-        }
-        panic!("unknown uuid found {}", uuid)
-    }
+//  fn what_is(&self, uuid: &Uuid) -> String {
+//      if let Some((_, _, v)) = self.ready.as_ref().unwrap().iter().find(|(id, _, _)| id == uuid) {
+//          return (**v).debug(40);
+//      }
+//      if self.waiting.as_ref().unwrap().iter().any(|(id, _, _, _)| id == uuid) {
+//          return "Waiting".to_string();
+//      }
+//      if self.requests.as_ref().unwrap().iter().any(|(id, _, _)| id == uuid) {
+//          return "Request".to_string();
+//      }
+//      if self.mutable_requests.as_ref().unwrap().iter().any(|(id, _, _, _)| id == uuid) {
+//          return "Mutable Request".to_string();
+//      }
+//      if self.completed.as_ref().unwrap().iter().any(|(id, _)| id == uuid) {
+//          return "completed".to_string();
+//      }
+//      panic!("unknown uuid found {}", uuid)
+//  }
 
-    pub fn add_ready(&mut self, uuid: Uuid, header: Header, command: BoxCommand<'a>) {
+    fn add_ready(&mut self, uuid: Uuid, header: Header, command: BoxCommand<'a>) {
       //let ser_c = command.serialize();
       //match self.ready.as_ref().unwrap().iter().find_map(|(ou, (oep, oc))|
       //    if ep == *oep && oc.serialize() == ser_c {Some(ou)} else {None}
@@ -168,11 +185,11 @@ impl<'a> Compiler<'a> {
         self.ready.as_mut().unwrap().push((uuid, header, command));
     }
 
-    pub fn wait_on(&mut self, uuid: Uuid, header: Header, ouid: Uuid) {
+    fn wait_on(&mut self, uuid: Uuid, header: Header, ouid: Uuid) {
         self.waiting.as_mut().unwrap().push((uuid, header, Callback::new(Complete::new_first), vec![ouid]));
     }
 
-    pub fn add_tasks(&mut self, tasks: Tasks<'a>) {
+    fn add_tasks(&mut self, tasks: Tasks<'a>) {
         for (uuid, task) in tasks {
             match task {
                 Task::Ready(header, command) => self.add_ready(uuid, header, command),
@@ -189,9 +206,9 @@ impl<'a> Compiler<'a> {
             for org_uuid in self.original_requests.clone().unwrap() {
                 while let Some(index) = self.ready.as_ref().unwrap().iter().position(|r| r.1.0 == org_uuid) {
                     let (uuid, header, command) = self.ready.as_mut().unwrap().remove(index);
-                    match command.process(uuid, header, &mut self.memory).await {
+                    match command.process(uuid, header, &mut self.memory, self.cache).await {
                         Ok(tasks) => self.add_tasks(tasks),
-                        Err(e) => {self.completed.as_mut().unwrap().insert(uuid, Box::new(ErrorWrapper::new(e)));}
+                        Err(e) => {self.completed.as_mut().unwrap().insert(uuid, Box::new(Arc::new(e)));}
                     }
                 }
             }
@@ -206,10 +223,10 @@ impl<'a> Compiler<'a> {
                     let responses: Responses = ids.iter().map(|id| {
                         self.completed.as_ref().unwrap().get(id).unwrap().clone()
                     }).collect();
-                    if responses.iter().any(|r| r.downcast_ref::<ErrorWrapper>().is_some()) {
-                        let errors: Vec<Box<ErrorWrapper>> = responses.into_iter().flat_map(|r| r.downcast::<ErrorWrapper>().ok()).collect();
+                    if responses.iter().any(|r| r.downcast_ref::<Arc<Error>>().is_some()) {
+                        let errors: Vec<Box<Arc<Error>>> = responses.into_iter().flat_map(|r| r.downcast::<Arc<Error>>().ok()).collect();
                         let error = Error::multi(errors);
-                        self.completed.as_mut().unwrap().insert(uuid, Box::new(ErrorWrapper::new(error)));
+                        self.completed.as_mut().unwrap().insert(uuid, Box::new(Arc::new(error)));
                     } else {
                         self.ready.as_mut().unwrap().push((uuid, header, callback(responses)));
                     }
@@ -229,7 +246,7 @@ impl<'a> Compiler<'a> {
 
     async fn process_requests(&mut self) {
         let mut requests: BTreeMap<Endpoint, Vec<(Uuid, Box<DwnRequest>)>> = BTreeMap::new();
-        let keys: Vec<(Endpoint, Uuid)> = (0..self.requests.as_ref().unwrap().len()).flat_map(|i| {
+        let keys: Vec<(Endpoint, Uuid)> = (0..self.requests.as_ref().unwrap().len()).flat_map(|_| {
             let (uuid, header, req) = self.requests.as_mut().unwrap().remove(0);
             if let Some(ouid) = self.requests.as_ref().unwrap().iter().find_map(|(ouid, oheader, oreq)| Some(ouid).filter(|_| header.1 == oheader.1 && req == *oreq)) {
                 self.wait_on(uuid, header, *ouid);
@@ -246,7 +263,7 @@ impl<'a> Compiler<'a> {
 
         let responses: Vec<(Uuid, BoxResponse)> = match self.router.send(requests).await {
             Err(e) => {
-                let error = Box::new(ErrorWrapper::new(e)) as BoxResponse;
+                let error = Box::new(Arc::new(e)) as BoxResponse;
                 keys.into_iter().map(|(_, id)| (id, error.clone())).collect()
             },
             Ok(mut resps) => keys.into_iter().map(|(ep, uuid)|
@@ -263,10 +280,10 @@ impl<'a> Compiler<'a> {
         //Priority requests come first followed by all non priority requests in order of original request
 
         let mut requests: BTreeMap<(Endpoint, Uuid), (Uuid, MutableAgentRequest, usize)> = BTreeMap::new();
-         for i in 0..self.mutable_requests.as_ref().unwrap().len() {
+         for _ in 0..self.mutable_requests.as_ref().unwrap().len() {
             let (uuid, header, req, prio) = self.mutable_requests.as_mut().unwrap().remove(0);
             let key = (header.1.clone(), req.get_id());
-            if let Some((ouid, oreq, oprio)) = requests.get(&key) {
+            if let Some((ouid, _, oprio)) = requests.get(&key) {
                 if prio > *oprio {
                     self.completed.as_mut().unwrap().insert(*ouid, Box::new(()) as BoxResponse);
                     requests.remove(&key);
@@ -293,7 +310,7 @@ impl<'a> Compiler<'a> {
 
         let responses: Vec<(Uuid, BoxResponse)> = match self.router.send(ep_requests).await {
             Err(e) => {
-                let error = Box::new(ErrorWrapper::new(e)) as BoxResponse;
+                let error = Box::new(Arc::new(e)) as BoxResponse;
                 keys.into_iter().map(|(_, id)| (id, error.clone())).collect()
             },
             Ok(mut resps) => keys.into_iter().map(|(ep, uuid)|
@@ -303,7 +320,7 @@ impl<'a> Compiler<'a> {
         self.completed.as_mut().unwrap().extend(responses);
     }
 
-    pub async fn compile<'b>(mut self) -> (Vec<Vec<Box<dyn Response + 'static>>>, CompilerMemory<'a>) {
+    pub async fn compile<'b>(mut self) -> Vec<Vec<Box<dyn Response + 'static>>> {
         loop {
             //self.print();
             self.process_ready().await;
@@ -319,8 +336,8 @@ impl<'a> Compiler<'a> {
             }
         }
         let mut responses = self.completed.replace(Default::default()).unwrap();
-        (self.original_requests.replace(Default::default()).unwrap().into_iter().map(|uuid| {
+        self.original_requests.replace(Default::default()).unwrap().into_iter().map(|uuid| {
             *responses.remove(&uuid).unwrap().downcast::<Vec<Box<dyn Response>>>().unwrap()
-        }).collect(), self.memory)
+        }).collect()
     }
 }
