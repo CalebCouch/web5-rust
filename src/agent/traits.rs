@@ -3,30 +3,36 @@ use super::Error;
 use super::structs::{Header, Task};
 use super::compiler::{CompilerMemory, CompilerCache};
 
-use crate::dids::{DidResolver, Endpoint, Did};
-
 use std::any::Any;
 
 use dyn_clone::{clone_trait_object, DynClone};
 use downcast_rs::DowncastSync;
+use simple_crypto::Hashable;
+use serde::Serialize;
 use uuid::Uuid;
 
 #[async_trait::async_trait]
-pub trait Command<'a>: TypeDebug + std::fmt::Debug + Send + Sync + DynClone {
-    async fn process(
+pub trait Command: TypeDebug + std::fmt::Debug + Send + Sync + DynClone + erased_serde::Serialize {
+    async fn process<'a>(
         self: Box<Self>, uuid: Uuid, header: Header,
         memory: &mut CompilerMemory<'a>, cache: &mut CompilerCache
-    ) -> Result<Vec<(Uuid, Task<'a>)>, Error>;
+    ) -> Result<Vec<(Uuid, Task)>, Error>;
 
-    async fn get_endpoints(
-        &self, dids: Vec<Did>, did_resolver: &dyn DidResolver
-    ) -> Result<Vec<Endpoint>, Error> {
-        let endpoints = did_resolver.get_endpoints(&dids).await?;
-        if endpoints.is_empty() {panic!("Did set had no endpoints");}
-        Ok(endpoints)
+    fn serialize(&self) -> String {
+        let mut buffer = std::io::BufWriter::new(Vec::<u8>::new());
+        let serializer = &mut serde_json::ser::Serializer::new(&mut buffer);
+        self.erased_serialize(&mut Box::new(<dyn erased_serde::Serializer>::erase(
+            serializer
+        ))).unwrap();
+        format!(
+            "{}::{}",
+            (*self).get_full_type(),
+            std::str::from_utf8(&buffer.into_inner().unwrap()).unwrap()
+        )
     }
 }
-clone_trait_object!(for<'a> Command<'a>);
+clone_trait_object!(Command);
+erased_serde::serialize_trait_object!(Command);
 
 pub trait TypeDebug: std::fmt::Debug {
     fn get_full_type(&self) -> String {
@@ -50,7 +56,7 @@ pub trait TypeDebug: std::fmt::Debug {
 
 impl<T: std::fmt::Debug> TypeDebug for T {}
 
-pub trait Response: Any + std::fmt::Debug + DowncastSync + DynClone + TypeDebug {
+pub trait Response: Any + erased_serde::Serialize + std::fmt::Debug + DowncastSync + DynClone + TypeDebug {
   //pub fn handle_error(self) -> Result<Box<dyn Response>, Error> {
   //    if let Some(error) = response.downcast_ref::<ErrorWrapper>() {
   //        return error.into();
@@ -70,8 +76,9 @@ pub trait Response: Any + std::fmt::Debug + DowncastSync + DynClone + TypeDebug 
   //    Ok(())
   //}
 }
+erased_serde::serialize_trait_object!(Response);
 clone_trait_object!(Response);
 
 
-impl<T: Any + std::fmt::Debug + Clone + Sync + Send + TypeDebug> Response for T {}
+impl<T: Any + std::fmt::Debug + Clone + Sync + Send + TypeDebug + Serialize> Response for T {}
 downcast_rs::impl_downcast!(sync Response);

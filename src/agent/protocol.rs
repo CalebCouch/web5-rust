@@ -5,9 +5,11 @@ use super::permission::{
     PermissionOptions,
     PermissionSet,
 };
+use super::structs::RecordPath;
 
 use crate::common::Schemas;
-use chrono::{DateTime, Utc};
+
+use std::collections::BTreeMap;
 
 use simple_crypto::{PublicKey, Hashable};
 
@@ -120,7 +122,7 @@ impl SystemProtocols {
         vec![
             Self::dms_channel(),
             Self::agent_keys(),
-            Self::date_time(),
+            //Self::date_time(),
             Self::usize(),
             Self::channel_item(),
             Self::shared_pointer(),
@@ -142,17 +144,17 @@ impl SystemProtocols {
         ).unwrap()
     }
 
-  //pub fn protocol_folder(protocol: Uuid) -> Protocol {
-  //    Protocol::new(
-  //        &format!("protocol_folder: {}", hex::encode(protocol.as_bytes())),
-  //        false,
-  //        PermissionOptions::new(false, false, false, Some(
-  //            ChannelPermissionOptions::new(false, false)
-  //        )),
-  //        None,//Some(serde_json::to_string(&schema_for!(Protocol)).unwrap()),
-  //        Some(ChannelProtocol{child_protocols: Some(vec![protocol])})
-  //    ).unwrap()
-  //}
+    pub fn protocol_folder(protocol: Uuid) -> Protocol {
+        Protocol::new(
+            &format!("protocol_folder: {}", hex::encode(protocol.as_bytes())),
+            false,
+            PermissionOptions::new(false, false, false, Some(
+                ChannelPermissionOptions::new(false, false)
+            )),
+            None,
+            Some(ChannelProtocol{child_protocols: Some(vec![protocol])})
+        ).unwrap()
+    }
 
     pub fn dms_channel() -> Protocol {
         Protocol::new(
@@ -162,7 +164,6 @@ impl SystemProtocols {
                 ChannelPermissionOptions::new(true, true)
             )),
             None,
-            //Some(ChannelProtocol::new(Some(vec![Self::pointer().hash()])))
             Some(ChannelProtocol::new(None))
         ).unwrap()
     }
@@ -172,17 +173,7 @@ impl SystemProtocols {
             "agent_keys",
             true,
             PermissionOptions::new(true, true, true, None),
-            Some(serde_json::to_string(&schema_for!(Vec<PublicKey>)).unwrap()),
-            None
-        ).unwrap()
-    }
-
-    pub fn date_time() -> Protocol {
-        Protocol::new(
-            "date_time",
-            true,
-            PermissionOptions::new(true, true, true, None),
-            Some(serde_json::to_string(&schema_for!(DateTime<Utc>)).unwrap()),
+            Some(serde_json::to_string(&schema_for!(BTreeMap<RecordPath, PublicKey>)).unwrap()),
             None
         ).unwrap()
     }

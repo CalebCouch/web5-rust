@@ -10,14 +10,16 @@ use super::traits::{Response, Command};
 
 use crate::dids::signing::{SignedObject, Signer};
 use crate::dids::Endpoint;
+
 use crate::dwn::structs::{DwnRequest, DwnItem, PublicRecord};
 
-use std::collections::{VecDeque, BTreeMap};
+use std::collections::{VecDeque};
 
 use simple_crypto::{Hashable, SecretKey, PublicKey, Key};
 use simple_database::database::{Filters, SortOptions};
 
 use serde::{Serialize, Deserialize};
+use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use uuid::Uuid;
 
@@ -25,25 +27,71 @@ use super::traits::TypeDebug;
 
 const INDEX_UUID: Uuid = Uuid::max();
 
-pub type Protocols<'a> = &'a BTreeMap<Uuid, Protocol>;
-pub type BoxCallback<'a> = Box<dyn FnOnce(Responses) -> BoxCommand<'a> + 'a + Send + Sync>;
-pub type BoxCommand<'a> = Box<dyn Command<'a> + 'a>;
-pub type Tasks<'a> = Vec<(Uuid, Task<'a>)>;
+pub type BoxCallback = Box<dyn FnOnce(Responses) -> BoxCommand + Send + Sync>;
+pub type BoxCommand = Box<dyn Command>;
+pub type Tasks = Vec<(Uuid, Task)>;
 pub type RecordInfo = (Protocol, PermissionSet);
 pub type Responses = Vec<Box<dyn Response>>;
 pub type BoxResponse = Box<dyn Response>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Header(pub Uuid, pub Endpoint, pub usize);
+pub struct Header {
+    pub oid: Uuid,
+    pub endpoint: Endpoint,
+    pub order: usize,
+    pub enc: bool
+}
 
-#[derive(JsonSchema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+//TODO: impl eq to check everything but order and oid
+
+impl Header {
+    pub fn new(oid: Uuid, endpoint: Endpoint, order: usize, enc: bool) -> Self {
+        Header{oid, endpoint, order, enc}
+    }
+    pub fn com(&self) -> Self {
+        let mut header = self.clone();
+        header.enc = false;
+        header
+    }
+}
+
+#[derive(JsonSchema, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(serde_with::SerializeDisplay)]
+#[derive(serde_with::DeserializeFromStr)]
 pub struct RecordPath {
     inner: Vec<Uuid>
+}
+
+impl std::fmt::Display for RecordPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "/{}", self.inner.iter().map(|id| id.to_string()).collect::<Vec<_>>().join("/"))
+    }
+}
+
+impl std::str::FromStr for RecordPath {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(RecordPath{inner:
+            s[1..].split("/").collect::<Vec<_>>()
+            .into_iter().filter_map(|id|
+                if id.is_empty() {None} else {Some(Uuid::from_str(id))}
+            ).collect::<Result<Vec<Uuid>, uuid::Error>>()?
+        })
+    }
 }
 
 impl RecordPath {
     pub fn new(path: &[Uuid]) -> Self {
         RecordPath{inner: path.to_vec()}
+    }
+
+    pub fn parent_of(&self, path: &RecordPath) -> bool {
+        path.as_slice().strip_prefix(self.as_slice()).is_some()
+    }
+
+    pub fn root() -> Self {
+        RecordPath{inner: Vec::new()}
     }
 
     pub fn last(&self) -> Uuid {
@@ -76,7 +124,7 @@ impl RecordPath {
 pub enum AgentRequest {
     ReadPrivate(SecretKey),
     ReadPublic(Filters, Option<SortOptions>),
-    //Read(PermissionSet, Signer),
+    ReadDM(DateTime<Utc>, Signer),
 }
 
 impl AgentRequest {
@@ -86,6 +134,8 @@ impl AgentRequest {
                 DwnRequest::ReadPrivate(SignedObject::from_key(&discover, String::new())?),
             Self::ReadPublic(filters, sort_options) =>
                 DwnRequest::ReadPublic(filters, sort_options),
+            Self::ReadDM(timestamp, signer) =>
+                DwnRequest::ReadDM(SignedObject::new(signer, timestamp)?),
         })
     }
 }
@@ -173,14 +223,14 @@ impl MutableAgentRequest {
     pub fn create_private(
         perms: PermissionSet,
         p_opts: Option<&PermissionOptions>,
-        protocol: &Protocol,
+        protocol: Protocol,
         payload: Vec<u8>
     ) -> Result<Self, Error> {
         protocol.validate_payload(&payload)?;
         let discover = perms.discover();
         let create = perms.create()?;
         let subset_perms = protocol.subset_permission(perms, p_opts)?;
-        let pr = PrivateRecord::new(subset_perms, protocol.uuid(), payload);
+        let pr = PrivateRecord::new(subset_perms, protocol, payload);
         Ok(Self::CreatePrivate(Box::new(pr), discover, create))
     }
 
@@ -189,19 +239,19 @@ impl MutableAgentRequest {
         child_perms: &PermissionSet,
         index: usize
     ) -> Result<Self, Error> {
-        let protocol = SystemProtocols::perm_pointer();
         let perms = parent_perms.pointer(index)?;
         let discover = perms.discover();
         let create = perms.create()?;
+        let protocol = SystemProtocols::perm_pointer();
         let subset = protocol.subset_permission(perms, None)?;
-        let pr = PrivateRecord::new(subset, protocol.uuid(), serde_json::to_vec(&child_perms)?);
+        let pr = PrivateRecord::new(subset, protocol, serde_json::to_vec(&child_perms)?);
         Ok(Self::CreatePrivate(Box::new(pr), discover, create))
     }
 
     pub fn update_private(
         perms: PermissionSet,
         p_opts: Option<&PermissionOptions>,
-        protocol: &Protocol,
+        protocol: Protocol,
         payload: Vec<u8>
     ) -> Result<Self, Error> {
         let delete = perms.delete()?;
@@ -212,7 +262,7 @@ impl MutableAgentRequest {
     }
 
     pub fn update_index(perms: PermissionSet, index: usize) -> Result<Self, Error> {
-        Self::update_private(perms, None, &SystemProtocols::usize(), serde_json::to_vec(&index)?)
+        Self::update_private(perms, None, SystemProtocols::usize(), serde_json::to_vec(&index)?)
     }
 
     pub fn delete_private(perms: &PermissionSet) -> Result<Self, Error> {
@@ -242,26 +292,26 @@ impl MutableAgentRequest {
     }
 }
 
-pub enum Task<'a> {
-    Ready(Header, BoxCommand<'a>),
-    Waiting(Header, BoxCallback<'a>, Vec<Uuid>),
+pub enum Task {
+    Ready(Header, BoxCommand),
+    Waiting(Header, BoxCallback, Vec<Uuid>),
     Request(Header, AgentRequest),
     MutableRequest(Header, MutableAgentRequest, usize),
     Completed(BoxResponse),
 }
 
-impl<'a> Task<'a> {
-    pub fn ready(header: Header, command: (impl Command<'a> + 'a)) -> Task<'a> {
+impl Task {
+    pub fn ready(header: Header, command: (impl Command + 'static)) -> Task {
         Task::Ready(header, Box::new(command))
     }
 
-    pub fn next(uuid: Uuid, header: Header, command: (impl Command<'a> + 'a)) -> Result<Tasks<'a>, Error> {
+    pub fn next(uuid: Uuid, header: Header, command: (impl Command + 'static)) -> Result<Tasks, Error> {
         Ok(vec![(uuid, Task::ready(header, command))])
     }
 
     pub fn waiting(
-        uuid: Uuid, header: Header, callback: BoxCallback<'a>, tasks: Vec<Task<'a>>
-    ) -> Result<Tasks<'a>, Error> {
+        uuid: Uuid, header: Header, callback: BoxCallback, tasks: Vec<Task>
+    ) -> Result<Tasks, Error> {
         let mut tasks = tasks.into_iter().map(|task| {
             (Uuid::new_v4(), task)
         }).collect::<VecDeque<_>>();
@@ -269,7 +319,10 @@ impl<'a> Task<'a> {
         tasks.push_front((uuid, Task::Waiting(header, Box::new(callback), ids)));
         Ok(tasks.into())
     }
-    pub fn completed(uuid: Uuid, response: impl Response) -> Result<Tasks<'a>, Error> {
+  //pub fn complete(response: impl Response) -> Result<Tasks, Error> {
+  //    Task::Completed(Box::new(response))
+  //}
+    pub fn completed(uuid: Uuid, response: impl Response) -> Result<Tasks, Error> {
         Ok(vec![(uuid, Task::Completed(Box::new(response)))])
     }
 }
@@ -277,8 +330,8 @@ impl<'a> Task<'a> {
 pub struct Callback {}
 impl Callback {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new<'a, T: Command<'a> + 'a>(command: impl FnOnce(Responses) -> T + 'a + Send + Sync) -> BoxCallback<'a> {
-        let callback = move |results: Responses| -> BoxCommand {Box::new(command(results))};
+    pub fn new<T: Command + 'static>(callback: impl FnOnce(Responses) -> T + Send + Sync + 'static) -> BoxCallback {
+        let callback = move |results: Responses| -> BoxCommand {Box::new(callback(results))};
         Box::new(callback)
     }
 }
@@ -286,15 +339,17 @@ impl Callback {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Record {
     pub path: RecordPath,
-    pub protocol: Uuid,
+    pub protocol: Protocol,
     pub payload: Vec<u8>
 }
 
 impl Record {
-    pub fn new(path: RecordPath, protocol: Uuid, payload: &[u8]) -> Self {
+    pub fn new(path: RecordPath, protocol: Protocol, payload: &[u8]) -> Self {
         Record{path, protocol, payload: payload.to_vec()}
     }
 }
+
+impl Hashable for Record {}
 
 impl std::fmt::Debug for PrivateRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -305,12 +360,12 @@ impl std::fmt::Debug for PrivateRecord {
 #[derive(JsonSchema, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PrivateRecord {
     pub perms: PermissionSet,
-    pub protocol: Uuid,
+    pub protocol: Protocol,
     pub payload: Vec<u8>
 }
 
 impl PrivateRecord {
-    pub fn new(perms: PermissionSet, protocol: Uuid, payload: Vec<u8>) -> Self {
+    pub fn new(perms: PermissionSet, protocol: Protocol, payload: Vec<u8>) -> Self {
         PrivateRecord{perms, protocol, payload}
     }
 

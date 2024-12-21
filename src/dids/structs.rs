@@ -17,6 +17,12 @@ use std::path::PathBuf;
 #[derive(Serialize, Deserialize, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct Endpoint(pub Did, pub Url);
 
+impl Default for Endpoint {
+    fn default() -> Self {
+        Endpoint(Did::default(), Url::parse("https://example.net").unwrap())
+    }
+}
+
 impl std::fmt::Debug for Endpoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?} : {}", self.0, self.1)
@@ -54,6 +60,12 @@ impl Indexable for Did {
     fn primary_key(&self) -> Vec<u8> {serde_json::to_vec(&self).unwrap()}
 }
 
+impl Default for Did {
+    fn default() -> Self {
+        Did{method: DidMethod::default(), id: "*****".to_string()}
+    }
+}
+
 impl std::fmt::Display for Did {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "did:{}:{}", self.method, self.id)
@@ -89,10 +101,13 @@ fn path_query_frag() -> String { format!("(?<path>{})(?<query>{})(?<fragment>{})
 fn did_pattern() -> String {format!("did:(?<method>{}):(?<id>{})", method_pattern(), method_id_pattern())}
 fn did_uri_pattern() -> String {format!("^{}{}$", did_pattern(), path_query_frag())}
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 #[derive(serde_with::SerializeDisplay)]
 #[derive(serde_with::DeserializeFromStr)]
-pub enum DidMethod {DHT}
+pub enum DidMethod {
+    #[default]
+    DHT
+}
 
 impl std::fmt::Display for DidMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

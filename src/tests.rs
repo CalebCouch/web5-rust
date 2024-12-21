@@ -8,13 +8,9 @@
 //      assert!(false);
 //      Ok(())
 //  }
-use snafu::ErrorCompat;
-
 use crate::error::Error;
 
 use simple_database::MemoryStore;
-use simple_database::database::{Filter, Filters};
-
 use simple_crypto::Hashable;
 
 use crate::dids::{DidResolver, DidDocument};
@@ -23,25 +19,26 @@ use crate::dids::DhtDocument;
 
 use crate::dwn::json_rpc::{JsonRpcClient, JsonRpcServer};
 use crate::dwn::traits::Server;
-use crate::dwn::structs::PublicRecord;
+//use crate::dwn::structs::PublicRecord;
 use crate::dwn::{Dwn, DwnIdentity};
 
 use crate::agent::{Wallet, Agent, Identity};
-use crate::agent::structs::{RecordPath, Record};
-use crate::agent::commands;
-use crate::agent::permission::{ChannelPermissionOptions, PermissionOptions};
-use crate::agent::protocol::{ChannelProtocol, Protocol};
-use crate::agent::traits::TypeDebug;
+use crate::agent::{RecordPath, Record};
+use crate::agent::{ChannelPermissionOptions, PermissionOptions};
+use crate::agent::{ChannelProtocol, Protocol};
+use crate::agent::CompilerCache;
 
 use crate::common::Schemas;
 
+
+//use crate::agent::scripts::*;
+use crate::agent::commands;
+use crate::agent::PermissionSet;
 
 use std::path::PathBuf;
 use std::collections::BTreeMap;
 
 use uuid::Uuid;
-
-use crate::agent::scripts::*;
 
 
 pub type Docs = BTreeMap<Did, Box<dyn DidDocument>>;
@@ -155,23 +152,81 @@ async fn run_test() -> Result<(), Error> {
     println!("room_protocol: {}", rooms_protocol.hash());
 
     let protocols = vec![rooms_protocol.clone(), messages_protocol.clone()];
+    let client = Box::new(JsonRpcClient{});
 
     //Wallet
-  //let a_wallet = Wallet::new(a_id, Box::new(did_resolver.clone()), None);
-    //let b_wallet = Wallet::new(b_id);//, Box::new(did_resolver.clone()), None);
-    let a_wallet = Wallet::new(a_id);
+    let a_wallet = Wallet::new(a_id, did_resolver.clone(), client.clone());
+    let b_wallet = Wallet::new(b_id, did_resolver.clone(), client.clone());
 
     //Agent
     let alice_agent = Agent::new(
         a_wallet.root(),
-        protocols.clone(),
-        did_resolver,
-        Box::new(JsonRpcClient{})
-    );
+        did_resolver.clone(),
+        client.clone()
+    ).await?;
 
-    let mut mem = alice_agent.new_compiler_memory();
+    let bob_agent = Agent::new(
+        b_wallet.root(),
+        did_resolver.clone(),
+        client.clone()
+    ).await?;
 
-    let mut compiler = alice_agent.new_compiler(mem);
+    let mut a_cache = CompilerCache::default();
+    let mut b_cache = CompilerCache::default();
+
+    let path = RecordPath::new(&[Uuid::new_v4()]);
+
+  //alice_agent.process_commands(&mut a_cache, vec![
+  //    Box::new(commands::Init::new(vec![RecordPath::root()]))
+  //]).await?.remove(0).downcast::<()>()?;
+
+  //alice_agent.process_commands(&mut a_cache, vec![
+  //    Box::new(commands::Init::new(vec![path]))
+  //]).await?.remove(0).downcast::<()>()?;
+
+    let record = Record::new(path.clone(), rooms_protocol.clone(), b"\"2\"");
+    println!("INIT////////////////////////////////////");
+    alice_agent.process_commands(&mut a_cache, vec![
+        Box::new(commands::CreatePrivate::new(record.clone(), None)),
+        Box::new(commands::Send::new(commands::CreatePrivate::new(record, None), vec![a_did]))
+    ]).await?.remove(0).downcast::<()>()?;
+//  println!("two");
+//  let record = Record::new(path.extend(&[Uuid::new_v4()]), messages_protocol.clone(), b"\"2\"");
+//  alice_agent.process_commands(&mut a_cache, vec![
+//      Box::new(commands::CreatePrivate::new(record.clone(), None)),
+//      //Box::new(commands::Send::new(commands::CreatePrivate::new(record, None), vec![a_did]))
+//  ]).await?.remove(0).downcast::<()>()?;
+
+
+  //alice_agent.process_commands(&mut a_cache, vec![
+  //    Share::new(path, None, b_did)
+  //]).await?.remove(0).downcast::<()>()?;
+
+
+  //alice_agent.process_commands(&mut cache, vec![
+  //    Share::new(path, None, b_did)
+  //]).await?.remove(0).downcast::<()>()?;
+
+
+  //let perms = a_wallet.root().enc_key.get_perms(&RecordPath::root(), None)?;
+  //alice_agent.process_commands(&mut a_cache, vec![
+  //    Box::new(CreateDM::new(perms, b_did))
+  //]).await?.remove(0).downcast::<()>()?;
+
+  //bob_agent.process_commands(&mut b_cache, vec![
+  //    Box::new(EstablishChannel::new(a_did))
+  //]).await?.remove(0);
+
+  //alice_agent.process_commands(&mut a_cache, vec![
+  //    Box::new(ScanDM::new())
+  //]).await?.remove(0).downcast::<()>()?;
+
+
+
+
+  //let mut mem = alice_agent.new_compiler_memory();
+
+  //let mut compiler = alice_agent.new_compiler(mem);
 
   //let record = PublicRecord::new(None, rooms_protocol.uuid(), b"\"HELLOE\"", None)?;
   //let id = record.uuid;
@@ -180,14 +235,14 @@ async fn run_test() -> Result<(), Error> {
   //    Some(vec![a_did.clone()])
   //).await?;
 
-    let path = RecordPath::new(&[Uuid::new_v4()]);
-    compiler.add_command(DeletePrivate::new(path.clone()), None).await?;
-    let record = Record::new(path.clone(), rooms_protocol.uuid(), b"\"1\"");
-    compiler.add_command(CreatePrivate::new(record.clone(), None), None).await?;
-    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"2\"");
-    compiler.add_command(CreatePrivate::new(record.clone(), None), None).await?;
-    let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"3\"");
-    compiler.add_command(CreatePrivate::new(record.clone(), None), None).await?;
+  //let path = RecordPath::new(&[Uuid::new_v4()]);
+  //compiler.add_command(DeletePrivate::new(path.clone()), None).await?;
+  //let record = Record::new(path.clone(), rooms_protocol.uuid(), b"\"1\"");
+  //compiler.add_command(CreatePrivate::new(record.clone(), None), None).await?;
+  //let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"2\"");
+  //compiler.add_command(CreatePrivate::new(record.clone(), None), None).await?;
+  //let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"3\"");
+  //compiler.add_command(CreatePrivate::new(record.clone(), None), None).await?;
 //  compiler.add_command(UpdatePrivate::new(record, None), None).await?;
 //  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"2\"");
 //  compiler.add_command(CreatePrivate::new(record, None), None).await?;
@@ -206,14 +261,14 @@ async fn run_test() -> Result<(), Error> {
 //  let record = Record::new(RecordPath::new(&[Uuid::new_v4()]), rooms_protocol.uuid(), b"\"9\"");
 //  compiler.add_command(CreatePrivate::new(record, None), None).await?;
 
-    let (res, mem) = compiler.compile().await;
-    println!("R: {:#?}", res);
-    let mut compiler = alice_agent.new_compiler(mem);
+  //let (res, mem) = compiler.compile().await;
+  //println!("R: {:#?}", res);
+  //let mut compiler = alice_agent.new_compiler(mem);
 
-    compiler.add_command(Scan::new(RecordPath::new(&[]), 0), None).await?;
+  //compiler.add_command(Scan::new(RecordPath::new(&[]), 0), None).await?;
 
-    let (mut res, mem) = compiler.compile().await;
-    println!("R: {:#?}", *res.remove(0).remove(0).downcast::<Vec<Record>>()?);
+  //let (mut res, mem) = compiler.compile().await;
+  //println!("R: {:#?}", *res.remove(0).remove(0).downcast::<Vec<Record>>()?);
 
 
 

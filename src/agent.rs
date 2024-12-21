@@ -1,13 +1,16 @@
 use super::error::Error;
 
+//TODO: remove
+pub use permission::PermissionSet;
+
 mod permission;
 pub use permission::{PermissionOptions, ChannelPermissionOptions};
-mod protocol;
-pub use protocol::{Protocol, ChannelProtocol};
 mod structs;
-pub use structs::{Record, RecordPath};
+pub use structs::{RecordPath, Record};
+mod protocol;
+pub use protocol::{ChannelProtocol, Protocol};
 mod traits;
-pub use traits::Response;
+pub use traits::{Response, TypeDebug};
 
 pub mod compiler;
 pub mod scripts;
@@ -18,18 +21,18 @@ mod commands;
 #[cfg(feature = "advanced")]
 pub mod commands;
 
+pub use compiler::CompilerCache;
+
 #[cfg(feature = "advanced")]
 pub mod custom_commands {
     pub use super::traits::Command;
     pub use super::structs::Header;
     pub use uuid::Uuid;
-    pub use super::compiler::{CompilerMemory, CompilerCache};
+    pub use super::compiler::CompilerMemory;
 }
 
-use protocol::{SystemProtocols};
-use compiler::{Compiler, CompilerCache};
-use structs::PathedKey;
-use traits::Command;
+use compiler::Compiler;
+use structs::{BoxCommand, PathedKey};
 
 use crate::ed25519::SecretKey as EdSecretKey;
 
@@ -46,12 +49,9 @@ use crate::dids::{
     Did
 };
 
-use std::collections::BTreeMap;
-
-use simple_crypto::SecretKey;
+use simple_crypto::{SecretKey};
 
 use serde::{Serialize, Deserialize};
-use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Identity {
@@ -94,28 +94,27 @@ impl Identity {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AgentKey {
     sig_key: DidKeyPair,
-    enc_key: PathedKey,
+    pub enc_key: PathedKey,
     com_key: PathedKey,
     //master_protocol: Hash,
 }
 
 pub struct Wallet {
-    identity: Identity
-  //did_resolver: Box<dyn DidResolver>,
-  //router: Box<dyn Router>,
+    identity: Identity,
+    did_resolver: Box<dyn DidResolver>,
+    client: Box<dyn Client>
 }
 
 impl Wallet {
     pub fn new(
         identity: Identity,
-      //did_resolver: Box<dyn DidResolver>,
-      //router: Option<Box<dyn Router>>,
+        did_resolver: Box<dyn DidResolver>,
+        client: Box<dyn Client>
     ) -> Self {
-      //let router = router.unwrap_or(Box::new(DefaultRouter::new(did_resolver.clone(), None)));
         Wallet{
-            identity
-          //router,
-          //did_resolver,
+            identity,
+            did_resolver,
+            client
         }
     }
 
@@ -123,55 +122,33 @@ impl Wallet {
         AgentKey{sig_key: self.identity.sig_key.clone(), enc_key: self.identity.enc_key.clone(), com_key: self.identity.com_key.clone()}
     }
 
-  //pub async fn get_agent_key(&self, protocol: &Protocol) -> Result<AgentKey, Error> {
-  //    let protocol_hash = protocol.hash();
-  //    let pid = protocol.uuid();
-  //    let root_agent_key = AgentKey::new(self.sig_key.clone(), self.enc_key.clone(), self.com_key.clone(), protocol_hash);
-  //    let pf = SystemProtocols::protocol_folder(protocol_hash);
-  //    let agent = Agent::new::<MemoryStore>(root_agent_key, vec![pf.clone()], None, Some(self.did_resolver.clone()), Some(self.router.clone())).await?;
-
-  //    if agent.read(&[pid], None).await?.is_none() {
-  //        agent.create(&[], &None, Record::new(Some(protocol.uuid()), &pf, Vec::new()), None).await?;
-  //    }
-
-  //    let filters = FiltersBuilder::build(vec![
-  //        ("author", Filter::equal(self.tenant().to_string())),
-  //        ("type", Filter::equal("agent_keys".to_string()))
-  //    ]);
-  //    let mut agent_keys = agent.public_read(filters, None, None).await?.first().and_then(|(_, record)|
-  //        serde_json::from_slice::<Vec<PublicKey>>(&record.payload).ok()
-  //    ).unwrap_or_default();
-
-  //    let enc_key = self.enc_key.derive_path(&[pid])?;
-  //    if !agent_keys.contains(&enc_key.key.public_key()) {
-  //        agent_keys.push(enc_key.key.public_key());
-  //        let record = Record::new(None, &SystemProtocols::agent_keys(), serde_json::to_vec(&agent_keys)?);
-  //        let index = IndexBuilder::build(vec![("type", "agent_keys")]);
-  //        agent.public_update(record, index, None).await?;
-  //    }
-  //    Ok(AgentKey::new(self.sig_key.clone(), enc_key, self.com_key.clone(), protocol_hash))
-  //}
+    pub fn get_agent_key(&self, path: RecordPath) -> Result<AgentKey, Error> {
+        let enc_key = self.identity.enc_key.derive_path(path.as_slice())?;
+        Ok(AgentKey{sig_key: self.identity.sig_key.clone(), enc_key, com_key: self.identity.com_key.clone()})
+    }
 }
 
 #[derive(Clone)]
 pub struct Agent {
     agent_key: AgentKey,
     did_resolver: Box<dyn DidResolver>,
-    protocols: BTreeMap<Uuid, Protocol>,
     router: Router,
 }
 
 impl Agent {
-    pub fn new(
+    pub async fn new(
         agent_key: AgentKey,
-        protocols: Vec<Protocol>,
         did_resolver: Box<dyn DidResolver>,
         client: Box<dyn Client>
-    ) -> Self {
-        let protocols = [SystemProtocols::all(), protocols].concat();
-        let protocols = BTreeMap::from_iter(protocols.into_iter().map(|p| (p.uuid(), p)));
+    ) -> Result<Self, Error> {
         let router = Router::new(did_resolver.clone(), client);
-        Agent{agent_key, did_resolver, protocols, router}
+        let path = agent_key.enc_key.path.clone();
+        let agent = Agent{agent_key, did_resolver, router};
+        let mut cache = CompilerCache::default();
+        agent.process_commands(
+            &mut cache, vec![Box::new(commands::Init::new(vec![path])) as BoxCommand]
+        ).await?.remove(0).downcast::<()>()?;
+        Ok(agent)
     }
 
     pub fn tenant(&self) -> &Did {&self.agent_key.sig_key.public.did}
@@ -185,18 +162,19 @@ impl Agent {
         Compiler::<'a>::new(
             cache,
             &*self.did_resolver,
-            &self.protocols,
+            //&self.protocols,
             &self.agent_key.sig_key,
             &self.agent_key.enc_key,
+            &self.agent_key.com_key,
             &self.router,
             self.tenant().clone()
         )
     }
 
-    pub async fn process_commands<'a>(&'a self, cache: &'a mut CompilerCache, commands: Vec<Box<impl Command<'a> + Clone + 'a>>) -> Result<Vec<Box<dyn Response>>, Error> {
+    pub async fn process_commands<'a>(&'a self, cache: &'a mut CompilerCache, commands: Vec<BoxCommand>) -> Result<Vec<Box<dyn Response>>, Error> {
         let mut comp = self.internal_new_compiler(cache);
         for command in commands.into_iter() {
-            comp.add_command(*command, None).await?;
+            comp.add_command(command, None).await?;
         }
         Ok(comp.compile().await.remove(0))
     }

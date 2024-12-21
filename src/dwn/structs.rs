@@ -11,6 +11,9 @@ use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+//TODO: Fix circular dependency
+use crate::agent::Protocol;
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub enum DwnResponse {
     ReadPrivate(Option<DwnItem>),
@@ -96,13 +99,13 @@ impl Indexable for DwnItem {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PublicRecord {
     pub uuid: Uuid,
-    pub protocol: Uuid,
+    pub protocol: Protocol,
     pub payload: Vec<u8>,
     pub index: Index,
 }
 
 impl PublicRecord {
-    pub fn new(uuid: Option<Uuid>, protocol: Uuid, payload: &[u8], index: Option<Index>) -> Result<Self, Error> {
+    pub fn new(uuid: Option<Uuid>, protocol: Protocol, payload: &[u8], index: Option<Index>) -> Result<Self, Error> {
         let uuid = uuid.unwrap_or(Uuid::new_v4());
         let index = index.unwrap_or_default();
         if index.contains_key("signer") ||
@@ -128,7 +131,7 @@ impl Indexable for PublicDwnItem {
     fn secondary_keys(&self) -> Index {
         let mut index = IndexBuilder::build(vec![
             ("signer", self.0.signer().to_string()),
-            ("protocol", self.0.inner().protocol.to_string()),
+            ("protocol", self.0.inner().protocol.uuid().to_string()),
             ("payload", self.0.inner().payload.hash().to_string()),
         ]).unwrap();
         index.extend(self.0.inner().index.clone());

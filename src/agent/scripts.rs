@@ -1,12 +1,13 @@
 use super::Error;
 
 use super::compiler::{CompilerMemory, CompilerCache};
-use super::permission::PermissionOptions;
+use super::permission::{PermissionOptions, PermissionSet};
 use super::traits::Command;
 use super::structs::{
     MutableAgentRequest,
     PrivateRecord,
     AgentRequest,
+    BoxCommand,
     RecordInfo,
     RecordPath,
     Responses,
@@ -19,108 +20,60 @@ use super::structs::{
 use super::commands;
 
 use crate::dids::signing::Signer;
+use crate::dids::Did;
 use crate::dwn::structs::{DwnResponse, PublicRecord};
 
-use simple_database::database::{Filters, SortOptions};
-use simple_database::Indexable;
+use std::collections::BTreeMap;
 
+use simple_database::database::{Filters, Filter, SortOptions};
+use simple_database::Indexable;
+use simple_crypto::PublicKey;
+
+use serde::Serialize;
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
-pub enum CreatePrivate<'a> {
-    #[allow(non_camel_case_types)]
-    new(Record, Option<&'a PermissionOptions>),
-    GetIndex(Responses, Record, Option<&'a PermissionOptions>),
-    CreateRecord(Responses, Record, Option<&'a PermissionOptions>, Box<RecordInfo>),
-}
-
-#[async_trait::async_trait]
-impl<'a> Command<'a> for CreatePrivate<'a> {
-    async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header,
-        memory: &mut CompilerMemory<'a>, cache: &mut CompilerCache
-    ) -> Result<Tasks<'a>, Error> {
-        match *self {
-            Self::new(record, p_opts) => {
-                let record_path = record.path.clone();
-                let parent_path = record_path.parent()?;
-
-                let callback = move |r: Responses| {
-                    Self::GetIndex(r, record, p_opts)
-                };
-                Task::waiting(uuid, header.clone(), Callback::new(callback), vec![
-                    Task::ready(header.clone(), commands::ReadInfo::new(
-                        parent_path.clone(), PermissionOptions::create_child()
-                    )),
-                    Task::ready(header.clone(), commands::ReadIndex::new(parent_path)),
-                    Task::ready(header, commands::ReadPrivate::path(record_path)),
-                ])
-            },
-            Self::GetIndex(mut results, record, p_opts) => {
-                match *results.remove(2).downcast::<(Option<Box<PrivateRecord>>, bool)>()? {
-                    (Some(precord), true) if precord.clone().into_record() == record => {
-                        return Task::completed(uuid, ());
-                    },
-                    (_, true) => {return Task::completed(uuid, "Conflict");},
-                    _ => {}
-                }
-                let index = *results.remove(1).downcast::<usize>()?;
-                let info = *results.remove(0).downcast::<RecordInfo>()?;
-
-                let discover_child = info.1.discover_child()?;
-
-                let callback = move |r: Responses| {
-                    Self::CreateRecord(r, record, p_opts, Box::new(info))
-                };
-                Task::waiting(uuid, header.clone(), Callback::new(callback), vec![
-                    Task::ready(header, commands::NextIndex::new(discover_child, index, None)),
-                ])
-            },
-            Self::CreateRecord(mut results, record, p_opts, info) => {
-                let index = *results.remove(0).downcast::<usize>()?;
-
-                //Validate Parent Child
-                let parent_protocol = &info.0;
-                parent_protocol.validate_child(&record.protocol)?;
-
-                let (min_perms, req) = commands::CreatePrivate::create(header.clone(), memory, cache, record, p_opts)?;
-                let (i_req, c_req, index) = commands::CreatePrivate::create_child(header.clone(), memory, &info.1, &min_perms, index)?;
-
-                Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new), vec![
-                    Task::MutableRequest(header.clone(), i_req, index),
-                    Task::MutableRequest(header.clone(), c_req, 0),
-                    Task::MutableRequest(header, req, 0),
-                ])
-            }
-        }
+#[derive(Serialize, Debug, Clone)]
+pub struct CreatePrivate {}
+impl CreatePrivate {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(record: Record, p_opts: Option<PermissionOptions>) -> BoxCommand {
+        Box::new(commands::CreatePrivate::new(record, p_opts))
     }
 }
 
-
-#[derive(Debug, Clone)]
+#[derive(Serialize, Debug, Clone)]
 pub enum ReadPrivate {
-    #[allow(non_camel_case_types)]
-    new(RecordPath),
-    #[allow(non_camel_case_types)]
-    child(RecordPath, usize),
+    New(RecordPath),
+    Child(RecordPath, usize),
     Complete(Responses),
 }
 
+impl ReadPrivate {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(path: RecordPath) -> BoxCommand {
+        Box::new(ReadPrivate::New(path))
+    }
+
+    pub fn child(path: RecordPath, index: usize) -> BoxCommand {
+        Box::new(ReadPrivate::Child(path, index))
+    }
+}
+
 #[async_trait::async_trait]
-impl<'a> Command<'a> for ReadPrivate {
-    async fn process(
+impl Command for ReadPrivate {
+    async fn process<'a>(
         self: Box<Self>, uuid: Uuid, header: Header,
-        _: &mut CompilerMemory<'a>, _: &mut CompilerCache
-    ) -> Result<Tasks<'a>, Error> {
+        _: &mut CompilerMemory, _: &mut CompilerCache
+    ) -> Result<Tasks, Error> {
         match *self {
-            Self::new(path) => {
+            Self::New(path) => {
                 Task::waiting(uuid, header.clone(), Callback::new(Self::Complete), vec![
                     Task::ready(header, commands::ReadPrivate::path(path))
                 ])
             },
-            Self::child(path, index) => {
+            Self::Child(path, index) => {
                 Task::waiting(uuid, header.clone(), Callback::new(Self::Complete), vec![
-                    Task::ready(header, commands::ReadPrivate::child(path, index))
+                    Task::ready(header, commands::ReadPrivateChild::new(path, index))
                 ])
             },
             Self::Complete(mut results) => {
@@ -131,219 +84,83 @@ impl<'a> Command<'a> for ReadPrivate {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum UpdatePrivate<'a> {
-    #[allow(non_camel_case_types)]
-    new(Record, Option<&'a PermissionOptions>),
-    UpdateOrCreate(Responses, Record, Option<&'a PermissionOptions>),
-}
+#[derive(Serialize, Debug, Clone)]
+pub struct UpdatePrivate {}
 
-#[async_trait::async_trait]
-impl<'a> Command<'a> for UpdatePrivate<'a> {
-    async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header,
-        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
-    ) -> Result<Tasks<'a>, Error> {
-        match *self {
-            Self::new(record, p_opts) => {
-                let parent_path = record.path.parent()?;
-                let record_path = record.path.clone();
-                let callback = move |r: Responses| {Self::UpdateOrCreate(r, record, p_opts)};
-                Task::waiting(uuid, header.clone(), Callback::new(callback), vec![
-                    Task::ready(header.clone(), commands::ReadInfo::new(
-                        parent_path.clone(), PermissionOptions::create_child()
-                    )),
-                    Task::ready(header.clone(), commands::ReadIndex::new(parent_path)),
-                    Task::ready(header, commands::ReadPrivate::path(record_path)),
-                ])
-            },
-            Self::UpdateOrCreate(mut r, record, p_opts) => {
-                match *r.remove(2).downcast::<(Option<Box<PrivateRecord>>, bool)>()? {
-                    (Some(e_record), _) => {
-                        let protocol = memory.get_protocol(&record.protocol)?;
-                        let perms = e_record.perms;
-                        let req = MutableAgentRequest::update_private(perms.clone(), p_opts, protocol, record.payload)?;
-                        let order = header.2;
-                        Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new),
-                            vec![Task::MutableRequest(header, req, order)]
-                        )
-                    },
-                    (None, exists) => {
-                        r.insert(2, Box::new((None::<Box<PrivateRecord>>, exists)));
-                        Task::next(uuid, header,  CreatePrivate::GetIndex(r, record, p_opts))
-                    }
-                }
-            },
-        }
+impl UpdatePrivate {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(record: Record, p_opts: Option<PermissionOptions>) -> BoxCommand {
+        Box::new(commands::UpdatePrivate::new(record, p_opts))
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct DeletePrivate {
-    path: RecordPath
-}
+#[derive(Serialize, Debug, Clone)]
+pub struct DeletePrivate {}
 
 impl DeletePrivate {
-    pub fn new(path: RecordPath) -> Self {
-        DeletePrivate{path}
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(path: RecordPath) -> BoxCommand {
+        Box::new(commands::DeletePrivate::new(path))
     }
 }
 
-#[async_trait::async_trait]
-impl<'a> Command<'a> for DeletePrivate {
-    async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header,
-        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
-    ) -> Result<Tasks<'a>, Error> {
-        let perms = memory.key.get_perms(&self.path, None)?;
-        let req = MutableAgentRequest::delete_private(&perms)?;
-        Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new), vec![
-            Task::MutableRequest(header, req, usize::MAX)
-        ])
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CreatePublic {
-    record: PublicRecord,
-    signer: Option<Signer>,
-}
-
+#[derive(Serialize, Debug, Clone)]
+pub struct CreatePublic {}
 impl CreatePublic {
-    pub fn new(record: PublicRecord, signer: Option<Signer>) -> Self {
-        CreatePublic{record, signer}
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(record: PublicRecord, signer: Option<Signer>) -> BoxCommand {
+        Box::new(commands::CreatePublic::new(record, signer))
     }
 }
 
-#[async_trait::async_trait]
-impl<'a> Command<'a> for CreatePublic {
-    async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header,
-        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
-    ) -> Result<Tasks<'a>, Error> {
-        let protocol = memory.get_protocol(&self.record.protocol)?;
-        protocol.validate_payload(&self.record.payload)?;
-        let signer = self.signer.unwrap_or(Signer::Left(memory.sig_key.clone()));
-        let req = MutableAgentRequest::create_public(self.record, signer)?;
-        Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new), vec![
-            Task::MutableRequest(header, req, 0)
-        ])
+#[derive(Serialize, Debug, Clone)]
+pub struct ReadPublic {}
+impl ReadPublic {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(filters: Filters, sort_options: Option<SortOptions>) -> BoxCommand {
+        Box::new(commands::ReadPublic::new(filters, sort_options))
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum ReadPublic {
-    #[allow(non_camel_case_types)]
-    new(Filters, Option<SortOptions>),
-    Completed(Responses, Filters, Option<SortOptions>)
-}
-
-#[async_trait::async_trait]
-impl<'a> Command<'a> for ReadPublic {
-    async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header,
-        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
-    ) -> Result<Tasks<'a>, Error> {
-        match *self {
-            Self::new(filters, sort_options) => {
-                //TODO: I suspect that if sort options contains a field not in the filters it will crash the dwn
-                let req = AgentRequest::ReadPublic(filters.clone(), sort_options.clone());
-                let callback = move |r: Responses| {Self::Completed(r, filters, sort_options)};
-                Task::waiting(uuid, header.clone(), Callback::new(callback), vec![
-                    Task::Request(header, req)
-                ])
-            },
-            Self::Completed(mut response, filters, sort_options) => {
-                let response = *response.remove(0).downcast::<DwnResponse>()?;
-                if let DwnResponse::ReadPublic(mut records) = response {
-                    if let Some(sort_options) = sort_options {
-                        sort_options.sort(&mut records)?;
-                    }
-                    let records = futures::future::join_all(records.into_iter().map(|item| async {
-                        item.0.verify(memory.did_resolver, None).await.ok()?;
-                        if !filters.filter(&item.secondary_keys()) {return None;}
-                        let record = item.0.unwrap();
-                        let protocol = memory.get_protocol(&record.protocol).ok()?;
-                        protocol.validate_payload(&record.payload).ok()?;
-                        Some(record)
-                    })).await;
-                    let records = records.into_iter().flatten().collect::<Vec<_>>();
-                    Task::completed(uuid, records)
-                } else {Err(Error::bad_response("Expected ReadPublic"))}
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct UpdatePublic {
-    record: PublicRecord,
-    signer: Option<Signer>,
-}
-
+#[derive(Serialize, Debug, Clone)]
+pub struct UpdatePublic {}
 impl UpdatePublic {
-    pub fn new(record: PublicRecord, signer: Option<Signer>) -> Self {
-        UpdatePublic{record, signer}
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(record: PublicRecord, signer: Option<Signer>) -> BoxCommand {
+        Box::new(commands::UpdatePublic::new(record, signer))
     }
 }
 
-#[async_trait::async_trait]
-impl<'a> Command<'a> for UpdatePublic {
-    async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header,
-        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
-    ) -> Result<Tasks<'a>, Error> {
-        let protocol = memory.get_protocol(&self.record.protocol)?;
-        protocol.validate_payload(&self.record.payload)?;
-        let signer = self.signer.unwrap_or(Signer::Left(memory.sig_key.clone()));
-        let req = MutableAgentRequest::update_public(self.record, signer)?;
-        Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new), vec![
-            Task::MutableRequest(header, req, 0)
-        ])
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DeletePublic {
-    uuid: Uuid,
-    signer: Option<Signer>
-}
-
+#[derive(Serialize, Debug, Clone)]
+pub struct DeletePublic {}
 impl DeletePublic {
-    pub fn new(uuid: Uuid, signer: Option<Signer>) -> Self {
-        DeletePublic{uuid, signer}
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(uuid: Uuid, signer: Option<Signer>) -> BoxCommand {
+        Box::new(commands::DeletePublic::new(uuid, signer))
     }
 }
 
-#[async_trait::async_trait]
-impl<'a> Command<'a> for DeletePublic {
-    async fn process(
-        self: Box<Self>, uuid: Uuid, header: Header,
-        memory: &mut CompilerMemory<'a>, _: &mut CompilerCache
-    ) -> Result<Tasks<'a>, Error> {
-        let signer = self.signer.unwrap_or(Signer::Left(memory.sig_key.clone()));
-        let req = MutableAgentRequest::delete_public(self.uuid, signer)?;
-        Task::waiting(uuid, header.clone(), Callback::new(commands::EnsureEmpty::new), vec![
-            Task::MutableRequest(header, req, usize::MAX)
-        ])
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Serialize, Debug, Clone)]
 pub enum Scan {
-    #[allow(non_camel_case_types)]
-    new(RecordPath, usize),
+    New(RecordPath, usize),
     Completed(Responses),
 }
 
+impl Scan {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(path: RecordPath, index: usize) -> BoxCommand {
+        Box::new(Scan::New(path, index))
+    }
+}
+
 #[async_trait::async_trait]
-impl<'a> Command<'a> for Scan {
-    async fn process(
+impl Command for Scan {
+    async fn process<'a>(
         self: Box<Self>, uuid: Uuid, header: Header,
-        _: &mut CompilerMemory<'a>, _: &mut CompilerCache
-    ) -> Result<Tasks<'a>, Error> {
+        _: &mut CompilerMemory, _: &mut CompilerCache
+    ) -> Result<Tasks, Error> {
         match *self {
-            Self::new(path, start) => {
+            Self::New(path, start) => {
                 Task::waiting(uuid, header.clone(), Callback::new(Self::Completed), vec![
                     Task::ready(header, commands::Scan::new(path, start))
                 ])
@@ -357,3 +174,143 @@ impl<'a> Command<'a> for Scan {
         }
     }
 }
+
+#[derive(Serialize, Debug, Clone)]
+pub enum Share {
+    New(RecordPath, Option<PermissionOptions>, Did),
+    Channel(Responses, RecordPath, Option<PermissionOptions>),
+  //Completed(Responses),
+}
+
+impl Share {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(
+        path: RecordPath, p_opts: Option<PermissionOptions>, recipient: Did
+    ) -> BoxCommand {
+        Box::new(Share::New(path, p_opts, recipient))
+    }
+}
+
+#[async_trait::async_trait]
+impl Command for Share {
+    async fn process<'a>(
+        self: Box<Self>, uuid: Uuid, header: Header,
+        memory: &mut CompilerMemory, _: &mut CompilerCache
+    ) -> Result<Tasks, Error> {
+        match *self {
+            Self::New(path, p_opts, recipient) => {
+                let filters = Filters::new(vec![
+                    ("signer", Filter::equal(recipient.to_string())),
+                    ("type", Filter::equal("agent_keys".to_string()))
+                ]);
+
+                let path_copy = path.clone();
+                let callback = move |r: Responses| {Self::Channel(r, path_copy, p_opts)};
+                Task::waiting(uuid, header.clone(), Callback::new(callback), vec![
+                    Task::ready(header.clone(), commands::ReadPrivate::path(path)),
+                    Task::ready(header.clone(), commands::EstablishChannel::new(recipient.clone())),
+                    Task::ready(header, commands::Send::New(ReadPublic::new(filters, None), vec![recipient]))
+                ])
+            },
+            Self::Channel(mut responses, path, p_opts) => {
+                let record_resp = *responses.remove(2).downcast::<Responses>()?;
+                let channel = *responses.remove(1).downcast::<()>()?;
+                let sharing_record = *responses.remove(0).downcast::<Option<Box<PrivateRecord>>>()?;
+
+                let protocol = sharing_record.ok_or(Error::not_found("Record"))?.protocol;
+                let perms = protocol.subset_permission(
+                    memory.get_perms(header.enc, &path, Some(&protocol))?, p_opts.as_ref()
+                )?;
+
+              //let channel_path = RecordPath::new(&[Uuid::new_v5(
+              //    &Uuid::NAMESPACE_OID, recipient.to_string().as_bytes()
+              //)]);
+
+                let agent_keys = record_resp.into_iter().find_map(|response|
+                    response.downcast::<Vec<PublicRecord>>().ok().and_then(|mut records|
+                        records.pop().and_then(|record|
+                            serde_json::from_slice::<BTreeMap<RecordPath, PublicKey>>(&record.payload).ok()
+                        )
+                    )
+                ).ok_or(Error::bad_request("Recipient has no active agents"))?;
+
+                let keys = agent_keys.into_iter().flat_map(|(opath, key)|
+                    Some(key).filter(|_| opath.parent_of(&path))
+                ).collect::<Vec<_>>();
+                keys.into_iter().map(|key|
+                    Ok(key.encrypt(&serde_json::to_vec(&perms)?)?)
+                ).collect::<Result<Vec<Vec<u8>>, Error>>()?;
+
+              //let record = Record::new(channel_path.
+
+              //Task::waiting(uuid, header.com(), Callback::new(EnsureEmpty::new), vec![
+              //    Task::Ready(
+              //])
+
+                todo!()
+
+              //}
+              //let channel = self.establish_direct_messages(recipient).await?;
+
+                            //let perms = serde_json::to_vec(&self.get_permission(path)?.subset(permission_options)?)?;
+
+              //let agent_keys = self.public_read(filters, None, Some(&[recipient])).await?.first().and_then(|(_, record)|
+              //    serde_json::from_slice::<Vec<PublicKey>>(&record.payload).ok()
+              //).ok_or(Error::bad_request("Agent.share", "Recipient has no agents"))?
+              //.into_iter().map(|key| Ok(key.encrypt(&perms)?)).collect::<Result<Vec<Vec<u8>>, Error>>()?;
+              //let record = Record::new(None, &SystemProtocols::shared_pointer(), serde_json::to_vec(&agent_keys)?);
+              //self.private_client.create_child(
+              //    &channel.perms,
+              //    record,
+              //    None,
+              //    &[self.tenant(), recipient]
+              //).await?;
+
+              //Task::waiting(uuid, header.clone(), Callback::new(Self::Completed), vec![
+              //    Task::ready(header, commands::Scan::new(path, start))
+              //])
+            },
+          //Self::Completed(mut responses) => {
+          //    let records = *responses.remove(0).downcast::<Vec<PrivateRecord>>()?;
+          //    Task::completed(uuid,
+          //        records.into_iter().map(|pr| pr.into_record()).collect::<Vec<_>>()
+          //    )
+          //}
+        }
+    }
+}
+
+//      let folder_path = RecordPath::new(&[protocol]);
+//      let root_agent_key = self.root();
+
+//      let folder_protocol = SystemProtocols::protocol_folder(protocol);
+//      let agent = Agent::new(root_agent_key, vec![folder_protocol.clone()], self.did_resolver.clone(), self.client.clone());
+
+//      let record = Record::new(folder_path.clone(), folder_protocol.uuid(), &[]);
+//      let filters = Filters::new(vec![
+//          ("signer", Filter::equal(self.identity.sig_key.public.did.to_string())),
+//          ("type", Filter::equal("agent_keys".to_string()))
+//      ]);
+
+//      let mut cache = CompilerCache::default();
+//      let mut responses = agent.process_commands(&mut cache, vec![
+//          scripts::CreatePrivate::new(record, None),
+//          scripts::ReadPublic::new(filters, None)
+//      ]).await?;
+
+//      let mut agent_keys = responses.remove(1).downcast::<Vec<Record>>()?.first().and_then(|record|
+//          serde_json::from_slice::<Vec<PublicKey>>(&record.payload).ok()
+//      ).unwrap_or_default();
+//      responses.remove(0).downcast::<()>()?;
+
+//      let enc_key = self.identity.enc_key.derive_path(folder_path.as_slice())?;
+//      if !agent_keys.contains(&enc_key.key.public_key()) {
+//          agent_keys.push(enc_key.key.public_key());
+
+//          let index = IndexBuilder::build(vec![("type", "agent_keys")])?;
+//          let record = PublicRecord::new(None, SystemProtocols::agent_keys().uuid(), &serde_json::to_vec(&agent_keys)?, Some(index))?;
+//          agent.process_commands(&mut cache, vec![
+//              scripts::UpdatePublic::new(record, None)
+//          ]).await?.remove(0).downcast::<()>()?;
+//      }
+//      Ok(AgentKey{sig_key: self.identity.sig_key.clone(), enc_key, com_key: self.identity.com_key.clone()})

@@ -4,6 +4,7 @@ fn get_backtrace() -> snafu::Backtrace {
     snafu::Backtrace::capture()
 }
 
+#[derive(serde_with::SerializeDisplay)]
 #[derive(Debug, Snafu)]
 #[snafu(module)]
 pub enum Error {

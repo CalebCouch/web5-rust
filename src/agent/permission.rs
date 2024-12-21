@@ -22,6 +22,10 @@ impl PermissionOptions {
         PermissionOptions{can_create, can_read, can_delete, channel}
     }
 
+    pub fn update() -> Self {
+        PermissionOptions{can_create: true, can_read: true, can_delete: true, channel: None}
+    }
+
     pub fn create_child() -> Self {
         PermissionOptions{can_create: false, can_read: false, can_delete: false, channel: Some(ChannelPermissionOptions{can_create: true, can_read: false})}
     }

@@ -3436,7 +3436,7 @@ dependencies = [
 
 [[package]]
 name = "web5-rust"
-version = "2.0.0-beta10"
+version = "2.0.0-beta11"
 dependencies = [
  "actix-web",
  "async-trait",
