@@ -38,6 +38,7 @@ use crate::ed25519::SecretKey as EdSecretKey;
 
 use crate::dwn::traits::Client;
 use crate::dwn::router::Router;
+use crate::dwn::json_rpc::JsonRpcClient;
 
 use crate::dids::DidResolver;
 use crate::dids::{
@@ -96,26 +97,17 @@ pub struct AgentKey {
     sig_key: DidKeyPair,
     pub enc_key: PathedKey,
     com_key: PathedKey,
-    //master_protocol: Hash,
 }
 
 pub struct Wallet {
     identity: Identity,
-    did_resolver: Box<dyn DidResolver>,
-    client: Box<dyn Client>
 }
 
 impl Wallet {
     pub fn new(
         identity: Identity,
-        did_resolver: Box<dyn DidResolver>,
-        client: Box<dyn Client>
     ) -> Self {
-        Wallet{
-            identity,
-            did_resolver,
-            client
-        }
+        Wallet{identity}
     }
 
     pub fn root(&self) -> AgentKey {
@@ -139,8 +131,8 @@ impl Agent {
     pub async fn new(
         agent_key: AgentKey,
         did_resolver: Box<dyn DidResolver>,
-        client: Box<dyn Client>
     ) -> Result<Self, Error> {
+        let client = Box::new(JsonRpcClient{}) as Box<dyn Client>;
         let router = Router::new(did_resolver.clone(), client);
         let path = agent_key.enc_key.path.clone();
         let agent = Agent{agent_key, did_resolver, router};

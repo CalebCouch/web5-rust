@@ -7,8 +7,6 @@ use super::permission::{
 };
 use super::structs::RecordPath;
 
-use crate::common::Schemas;
-
 use std::collections::BTreeMap;
 
 use simple_crypto::{PublicKey, Hashable};
@@ -118,20 +116,6 @@ impl Protocol {
 
 pub struct SystemProtocols{}
 impl SystemProtocols {
-    pub fn all() -> Vec<Protocol> {
-        vec![
-            Self::dms_channel(),
-            Self::agent_keys(),
-            //Self::date_time(),
-            Self::usize(),
-            Self::channel_item(),
-            Self::shared_pointer(),
-            Self::perm_pointer(),
-            Self::pointer(),
-            Self::root(),
-        ]
-    }
-
     pub fn root() -> Protocol {
         Protocol::new(
             "root",
@@ -144,17 +128,17 @@ impl SystemProtocols {
         ).unwrap()
     }
 
-    pub fn protocol_folder(protocol: Uuid) -> Protocol {
-        Protocol::new(
-            &format!("protocol_folder: {}", hex::encode(protocol.as_bytes())),
-            false,
-            PermissionOptions::new(false, false, false, Some(
-                ChannelPermissionOptions::new(false, false)
-            )),
-            None,
-            Some(ChannelProtocol{child_protocols: Some(vec![protocol])})
-        ).unwrap()
-    }
+  //pub fn protocol_folder(protocol: Uuid) -> Protocol {
+  //    Protocol::new(
+  //        &format!("protocol_folder: {}", hex::encode(protocol.as_bytes())),
+  //        false,
+  //        PermissionOptions::new(false, false, false, Some(
+  //            ChannelPermissionOptions::new(false, false)
+  //        )),
+  //        None,
+  //        Some(ChannelProtocol{child_protocols: Some(vec![protocol])})
+  //    ).unwrap()
+  //}
 
     pub fn dms_channel() -> Protocol {
         Protocol::new(
@@ -188,15 +172,15 @@ impl SystemProtocols {
         ).unwrap()
     }
 
-    pub fn channel_item() -> Protocol {
-        Protocol::new(
-            "channel_item",
-            false,
-            PermissionOptions::new(false, false, false, None),
-            Some(serde_json::to_string(&Schemas::any()).unwrap()),
-            None
-        ).unwrap()
-    }
+  //pub fn channel_item() -> Protocol {
+  //    Protocol::new(
+  //        "channel_item",
+  //        false,
+  //        PermissionOptions::new(false, false, false, None),
+  //        Some(serde_json::to_string(&Schemas::any()).unwrap()),
+  //        None
+  //    ).unwrap()
+  //}
 
     pub fn perm_pointer() -> Protocol {
         Protocol::new(
@@ -218,13 +202,13 @@ impl SystemProtocols {
         ).unwrap()
     }
 
-    pub fn shared_pointer() -> Protocol {
-        Protocol::new(
-            "shared_pointer",
-            false,
-            PermissionOptions::new(true, true, false, None),
-            Some(serde_json::to_string(&schema_for!(Vec<Vec<u8>>)).unwrap()),
-            None
-        ).unwrap()
-    }
+  //pub fn shared_pointer() -> Protocol {
+  //    Protocol::new(
+  //        "shared_pointer",
+  //        false,
+  //        PermissionOptions::new(true, true, false, None),
+  //        Some(serde_json::to_string(&schema_for!(Vec<Vec<u8>>)).unwrap()),
+  //        None
+  //    ).unwrap()
+  //}
 }

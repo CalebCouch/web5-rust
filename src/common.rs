@@ -15,9 +15,6 @@ impl Schemas {
             ..Default::default()
         })
     }
-    pub fn any() -> Schema {
-        Schema::Bool(true)
-    }
 }
 
 pub enum Convert {

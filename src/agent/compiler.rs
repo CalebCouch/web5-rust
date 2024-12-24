@@ -2,7 +2,7 @@ use super::Error;
 
 use super::protocol::Protocol;
 use super::permission::PermissionSet;
-use super::traits::{Response, TypeDebug};
+use super::traits::Response;
 use super::commands::{Complete, Send};
 use super::structs::{
     MutableAgentRequest,

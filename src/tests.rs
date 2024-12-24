@@ -133,7 +133,7 @@ async fn run_test() -> Result<(), Error> {
         "Message",
         true,
         PermissionOptions::new(true, true, false, None),
-        Some(serde_json::to_string(&Schemas::any()).unwrap()),
+        Some(serde_json::to_string(&schemars::schema::Schema::Bool(true)).unwrap()),
         None
     )?;
     println!("messages_protocol: {}", messages_protocol.hash());
@@ -144,7 +144,7 @@ async fn run_test() -> Result<(), Error> {
         PermissionOptions::new(true, true, false, Some(
             ChannelPermissionOptions::new(true, true)
         )),
-        Some(serde_json::to_string(&Schemas::any()).unwrap()),
+        Some(serde_json::to_string(&schemars::schema::Schema::Bool(true)).unwrap()),
         Some(ChannelProtocol::new(
             Some(vec![&messages_protocol])
         ))
@@ -155,20 +155,18 @@ async fn run_test() -> Result<(), Error> {
     let client = Box::new(JsonRpcClient{});
 
     //Wallet
-    let a_wallet = Wallet::new(a_id, did_resolver.clone(), client.clone());
-    let b_wallet = Wallet::new(b_id, did_resolver.clone(), client.clone());
+    let a_wallet = Wallet::new(a_id);
+    let b_wallet = Wallet::new(b_id);
 
     //Agent
     let alice_agent = Agent::new(
         a_wallet.root(),
         did_resolver.clone(),
-        client.clone()
     ).await?;
 
     let bob_agent = Agent::new(
         b_wallet.root(),
         did_resolver.clone(),
-        client.clone()
     ).await?;
 
     let mut a_cache = CompilerCache::default();

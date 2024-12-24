@@ -429,7 +429,7 @@ impl Command for NextIndex {
             Self::new(path) => {
                 println!("Starting NextIndex");
                 let index_key = (header.endpoint.clone(), header.enc, path.clone());
-                if memory.create_index.get(&index_key).is_some() {
+                if memory.create_index.contains_key(&index_key) {
                     return Task::completed(uuid, ());
                 }
                 let path_copy = path.clone();
@@ -448,7 +448,7 @@ impl Command for NextIndex {
             }
             Self::Recursion(results, path, discover_child, mut index) => {
                 let index_key = (header.endpoint.clone(), header.enc, path.clone());
-                if memory.create_index.get(&index_key).is_some() {
+                if memory.create_index.contains_key(&index_key) {
                     return Task::completed(uuid, ());
                 }
                 if let Some(mut results) = results {
@@ -478,7 +478,7 @@ impl Command for NextIndex {
         format!(
             "{}::{}",
             (*self).get_full_type(),
-            path.to_string()
+            path
         )
     }
 }
@@ -488,8 +488,6 @@ impl Hashable for NextIndex {}
 #[derive(Serialize, Debug, Clone)]
 pub enum Exists {
     #[allow(non_camel_case_types)]
-    path(RecordPath),
-    #[allow(non_camel_case_types)]
     new(SecretKey),
     Complete(Responses),
 }
@@ -498,13 +496,9 @@ pub enum Exists {
 impl Command for Exists {
     async fn process<'a>(
         self: Box<Self>, uuid: Uuid, header: Header,
-        memory: &mut CompilerMemory, _: &mut CompilerCache
+        _: &mut CompilerMemory, _: &mut CompilerCache
     ) -> Result<Tasks, Error> {
         match *self {
-            Self::path(path) => {
-                let discover = memory.get_perms(header.enc, &path, None)?.discover();
-                Task::next(uuid, header, Self::new(discover))
-            },
             Self::new(key) => {
                 Task::waiting(uuid, header.clone(), Callback::new(Self::Complete), vec![
                     Task::Request(header, AgentRequest::ReadPrivate(key))
@@ -564,6 +558,7 @@ pub struct Send {
 }
 
 impl Send {
+    #[allow(non_snake_case)]
     pub fn New(command: Box<dyn Command>, recipients: Vec<Did>) -> Self {
         Send{command, recipients}
     }

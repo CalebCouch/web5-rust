@@ -28,6 +28,7 @@ struct JsonClient {
 pub struct JsonRpcClient {}
 
 impl JsonRpcClient {
+    #[cfg(test)]
     pub async fn client_debug(url: &str) -> String {
         let client = JsonClient{inner: reqwest::Client::new(), base_url: Url::parse(url).unwrap()};
         client.debug().await.unwrap()

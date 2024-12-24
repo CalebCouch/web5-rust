@@ -7,7 +7,6 @@ use std::any::Any;
 
 use dyn_clone::{clone_trait_object, DynClone};
 use downcast_rs::DowncastSync;
-use simple_crypto::Hashable;
 use serde::Serialize;
 use uuid::Uuid;
 

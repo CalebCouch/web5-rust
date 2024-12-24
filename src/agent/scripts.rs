@@ -1,14 +1,11 @@
 use super::Error;
 
 use super::compiler::{CompilerMemory, CompilerCache};
-use super::permission::{PermissionOptions, PermissionSet};
+use super::permission::PermissionOptions;
 use super::traits::Command;
 use super::structs::{
-    MutableAgentRequest,
     PrivateRecord,
-    AgentRequest,
     BoxCommand,
-    RecordInfo,
     RecordPath,
     Responses,
     Callback,
@@ -21,12 +18,11 @@ use super::commands;
 
 use crate::dids::signing::Signer;
 use crate::dids::Did;
-use crate::dwn::structs::{DwnResponse, PublicRecord};
+use crate::dwn::structs::PublicRecord;
 
 use std::collections::BTreeMap;
 
 use simple_database::database::{Filters, Filter, SortOptions};
-use simple_database::Indexable;
 use simple_crypto::PublicKey;
 
 use serde::Serialize;
@@ -214,7 +210,7 @@ impl Command for Share {
             },
             Self::Channel(mut responses, path, p_opts) => {
                 let record_resp = *responses.remove(2).downcast::<Responses>()?;
-                let channel = *responses.remove(1).downcast::<()>()?;
+                let _channel = *responses.remove(1).downcast::<()>()?;
                 let sharing_record = *responses.remove(0).downcast::<Option<Box<PrivateRecord>>>()?;
 
                 let protocol = sharing_record.ok_or(Error::not_found("Record"))?.protocol;
